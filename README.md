@@ -7,8 +7,16 @@ bare git repo，`$HOME` 就是工作区 —— 改了什么 `dot status` 直接�
 
 ## 装
 
+**macOS / Linux**
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/erichuanp/dotfiles/main/install.sh | sh
+```
+
+**Windows**（PowerShell）
+
+```powershell
+irm https://raw.githubusercontent.com/erichuanp/dotfiles/main/install.ps1 | iex
 ```
 
 会问一次分级：
@@ -17,22 +25,44 @@ curl -fsSL https://raw.githubusercontent.com/erichuanp/dotfiles/main/install.sh 
 |---|---|---|
 | **1 个人设备** | 自己的机器 | 全套 + `ssh config`、`authorized_keys`（要密码解密） |
 | **2 公司个人用户** | 公司里我自己的账号 | 除 ssh 相关外全套 |
-| **3 容器** | dev container | 只有 shell / git / tmux 配置 |
+| **3 容器** | dev container | 只有 shell / git / tmux 配置（Windows 无此级） |
 
-跳过提问：`DOTFILES_TIER=2 curl ... | sh`。**容器构建时没有 tty，自动按 3 级装**，所以 Dockerfile 里直接写：
+跳过提问：`DOTFILES_TIER=2 curl ... | sh`。**容器构建时没有 tty，自动按 3 级装**，
+所以 Dockerfile 里直接写：
 
 ```dockerfile
 RUN curl -fsSL https://raw.githubusercontent.com/erichuanp/dotfiles/main/install.sh | sh
 SHELL ["/bin/zsh", "-c"]
 ```
 
-Windows：
+Windows 跑完补一句，否则受管的 gitconfig 会盖掉 gh 的凭据助手、`git push` 走 HTTPS 会失效：
 
 ```powershell
-irm https://raw.githubusercontent.com/erichuanp/dotfiles/main/install.ps1 | iex
+gh auth setup-git
 ```
 
-装之前的同名文件一律先原样备份到 `~/.dotfiles-backup/`。
+### 纯国内节点（sz1 / sz2 那种）
+
+脚本自己探路，四级回退：**直连 → 反向 SOCKS → ghfast 代理 → 报错退出**。
+
+第二级要上游配合。SSH 协议不允许服务端主动向客户端开通道，所以管子只能在
+连接时铺好，脚本只负责发现它在不在：
+
+```sh
+ssh -R 1080 sz1        # 然后在里面照常跑安装
+```
+
+嫌麻烦就写进上游的 `~/.ssh/config`，以后自动带上：
+
+```
+Host sz1 sz2
+  RemoteForward 1080
+```
+
+反向 SOCKS 排在公共代理前面：它只转发 TCP，到 GitHub 的 TLS 是端到端的；
+ghfast 必须终止 TLS 再重新取，内容它全看得见。
+
+装之前，内容和仓库不一致的同名文件会先备份到 `~/tmp/.dotfiles-backup/`（一模一样的不备份，`*.enc` 直接覆盖）。
 
 ## 日常
 
