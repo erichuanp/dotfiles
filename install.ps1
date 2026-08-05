@@ -48,21 +48,21 @@ Write-Host "平台：Windows $env:PROCESSOR_ARCHITECTURE"
 # 四级回退。反向 SOCKS 排在公共代理前面：它只转发 TCP，到 GitHub 的 TLS 是端到端的；
 # ghfast 必须终止 TLS 再重新取，内容它全看得见。
 # 用 curl.exe（Win10+ 自带）而不是 Invoke-WebRequest —— 后者不支持 SOCKS 代理。
-function Test-Url($extra) {
-    & curl.exe -fsS -o NUL @extra --connect-timeout 10 --max-time 25 'https://github.com/' 2>$null
+function Test-Url($u, $extra) {
+    & curl.exe -fsS -o NUL @extra --connect-timeout 10 --max-time 25 $u 2>$null
     return ($LASTEXITCODE -eq 0)
 }
 step 'github.com 连通性'
 $mode = 'fail'
-if (Test-Url @()) { $mode = 'direct'; okmsg 'OK' }
-elseif (Test-Url @('--socks5-hostname', $Socks)) {
+if (Test-Url 'https://github.com/' @()) { $mode = 'direct'; okmsg 'OK' }
+elseif (Test-Url 'https://github.com/' @('--socks5-hostname', $Socks)) {
     # SSH 协议不允许服务端主动向客户端开通道，这条管子只能是上游机器
     # 连过来时用 -R 铺好的。这里只负责发现它在不在。
     $mode = 'socks'; okmsg "直连不通 -> 反向 SOCKS $Socks"
     $CurlNet = @('--socks5-hostname', $Socks)
     $GitNet  = @('-c', "http.proxy=socks5h://$Socks")
 }
-elseif ((& curl.exe -fsS -o NUL --connect-timeout 10 --max-time 25 "$Proxy/https://github.com/" 2>$null; $LASTEXITCODE -eq 0)) {
+elseif (Test-Url "$Proxy/https://github.com/" @()) {
     $mode = 'proxy'; okmsg "直连不通 -> $Proxy"
 }
 else {
