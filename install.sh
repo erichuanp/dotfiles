@@ -124,6 +124,46 @@ fi
 mkdir -p "$BIN"
 PATH="$BIN:$PATH"
 
+# 架构与下载助手：两个 OS 都要用，所以必须定义在 case 之前
+os=$(uname -s)
+case "$(uname -m)" in
+  x86_64|amd64)  a1=x86_64  a2=amd64 rgl=musl ;;
+  aarch64|arm64) a1=aarch64 a2=arm64 rgl=gnu  ;;
+  *)             a1=""      a2=""    rgl=""   ;;
+esac
+case "$os" in Darwin) osname=macos ;; Linux) osname=linux ;; *) osname="" ;; esac
+
+# 取 releases/latest 的重定向拿版本号，不碰 GitHub API，免限流
+ghtag() {
+  curl -fsSLI --retry 3 --connect-timeout 10 -o /dev/null -w '%{url_effective}' \
+    "https://github.com/$1/releases/latest" | grep -o '/tag/[^/]*$' | sed 's#.*/tag/##'
+}
+# ghbin <repo> <tar.gz 资产名，TAG/VER 占位> <二进制名>
+ghbin() {
+  [ -n "$a1" ] || return 0
+  tag=$(ghtag "$1"); [ -n "$tag" ] || { say "WARN: $3 版本探测失败"; return 0; }
+  asset=$(printf '%s' "$2" | sed "s/TAG/$tag/g; s/VER/${tag#v}/g")
+  t=$(mktemp -d)
+  curl -fsSL --retry 3 --connect-timeout 10 \
+    "https://github.com/$1/releases/download/$tag/$asset" | tar -xz -C "$t" 2>/dev/null || :
+  f=$(find "$t" -type f -name "$3" | head -1)
+  if [ -n "$f" ]; then install -m755 "$f" "$BIN/$3" && say "$3 $tag -> $BIN/$3"
+  else say "WARN: $3 下载失败 ($asset)"; fi
+  rm -rf "$t"
+}
+# ghraw <repo> <裸二进制资产名，TAG/VER 占位> <二进制名>
+ghraw() {
+  [ -n "$a2" ] && [ -n "$osname" ] || return 0
+  tag=$(ghtag "$1"); [ -n "$tag" ] || { say "WARN: $3 版本探测失败"; return 0; }
+  asset=$(printf '%s' "$2" | sed "s/TAG/$tag/g; s/VER/${tag#v}/g")
+  if curl -fsSL --retry 3 --connect-timeout 10 \
+       "https://github.com/$1/releases/download/$tag/$asset" -o "$BIN/$3.part"; then
+    chmod +x "$BIN/$3.part" && mv "$BIN/$3.part" "$BIN/$3" && say "$3 $tag -> $BIN/$3"
+  else
+    say "WARN: $3 下载失败 ($asset)"
+  fi
+}
+
 case "$(uname -s)" in
 Darwin)
   if ! have brew && [ ! -x /opt/homebrew/bin/brew ] && [ ! -x /usr/local/bin/brew ]; then
@@ -143,27 +183,6 @@ Darwin)
   MINICONDA_OS=MacOSX
   ;;
 Linux)
-  case $(uname -m) in
-    x86_64)  a1=x86_64  a2=amd64 rgl=musl ;;
-    aarch64) a1=aarch64 a2=arm64 rgl=gnu ;;
-    *) a1=""; a2=""; rgl="" ;;
-  esac
-  # ghbin <repo> <资产名,TAG/VER 占位> <二进制名>
-  # 走 releases/latest 的重定向拿版本号，不碰 GitHub API，免限流
-  ghbin() {
-    [ -n "$a1" ] || return 0
-    tag=$(curl -fsSLI --retry 3 --connect-timeout 10 -o /dev/null -w '%{url_effective}' \
-          "https://github.com/$1/releases/latest" | grep -o '/tag/[^/]*$' | sed 's#.*/tag/##')
-    [ -n "$tag" ] || { say "WARN: $3 版本探测失败"; return 0; }
-    asset=$(printf '%s' "$2" | sed "s/TAG/$tag/g; s/VER/${tag#v}/g")
-    t=$(mktemp -d)
-    curl -fsSL --retry 3 --connect-timeout 10 \
-      "https://github.com/$1/releases/download/$tag/$asset" | tar -xz -C "$t" 2>/dev/null || :
-    f=$(find "$t" -type f -name "$3" | head -1)
-    if [ -n "$f" ]; then install -m755 "$f" "$BIN/$3" && say "$3 $tag -> $BIN/$3"
-    else say "WARN: $3 下载失败 ($asset)"; fi
-    rm -rf "$t"
-  }
   have lsd || ghbin lsd-rs/lsd         "lsd-TAG-$a1-unknown-linux-musl.tar.gz"     lsd
   have rg  || ghbin BurntSushi/ripgrep "ripgrep-VER-$a1-unknown-linux-$rgl.tar.gz" rg
   have fzf || ghbin junegunn/fzf       "fzf-VER-linux_$a2.tar.gz"                  fzf
@@ -207,8 +226,8 @@ if [ "$tier" != 3 ]; then
   have sshow || pip install --user --quiet sshow 2>/dev/null || pip3 install --user --quiet sshow 2>/dev/null \
     || say "WARN: sshow 安装失败（需要 pip）"
 
-  # dops：Go 二进制
-  have dops || ghbin Mikescher/better-docker-ps "better-docker-ps_linux-$a2" dops 2>/dev/null || :
+  # dops：裸二进制，两个 OS 都有
+  have dops || ghraw Mikescher/better-docker-ps "dops_${osname}-${a2}" dops
 
   # node（nvm，用户态）。nvm 不兼容 dash，必须经 bash
   if ! have node && [ ! -s "$HOME/.nvm/nvm.sh" ]; then
