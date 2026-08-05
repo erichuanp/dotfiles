@@ -51,7 +51,7 @@ say "分级 $tier"
 
 # ---------- 取仓库 ----------
 if [ -d "$GITDIR" ]; then
-  say "已存在 $GITDIR，只更新分级与工作区（不动本地改动）"
+  say "已存在 ${GITDIR} ，只更新分级与工作区（不动本地改动）"
   dot fetch -q origin || say "WARN: fetch 失败，用本地副本继续"
 else
   git clone --bare -q "$REPO" "$GITDIR"

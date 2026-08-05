@@ -33,7 +33,7 @@ $files = switch ($tier) {
 }
 say "分级 $tier"
 
-if (Test-Path $GitDir) { say "已存在 $GitDir，只更新分级与工作区"; dot fetch -q origin }
+if (Test-Path $GitDir) { say "已存在 $($GitDir) ，只更新分级与工作区"; dot fetch -q origin }
 else { git clone --bare -q $Repo $GitDir }
 
 dot config core.bare false
