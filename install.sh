@@ -140,7 +140,7 @@ _dl() {
 # ---------- 1/5 取仓库 ----------
 if [ -d "$GITDIR" ]; then
   step "fetch 仓库"
-  if dot fetch -q origin 2>/dev/null; then okmsg "OK"; else okmsg "FAIL（用本地副本继续）"; fi
+  if dot fetch -q origin 2>/dev/null; then okmsg "OK"; else okmsg "FAIL"; fi
 else
   step "clone 仓库"
   if _out=$(git $GIT_NET clone --bare -q "$(ghurl "$REPO")" "$GITDIR" 2>&1); then okmsg "OK"
@@ -347,7 +347,7 @@ Linux)
       if _out=$($SUDO apk add --no-cache $base 2>&1); then okmsg "OK"
       else okmsg "FAIL"; fi
     else
-      okmsg "SKIP（无 sudo）"
+      okmsg "SKIP"
     fi
   fi
   MINICONDA_OS=Linux
@@ -376,7 +376,7 @@ if [ "$tier" != 3 ]; then
   if have sshow; then okmsg "SKIP"
   else
     _pip=$(command -v pip3 || command -v pip || echo "")
-    if [ -z "$_pip" ]; then okmsg "FAIL（没有 pip）"
+    if [ -z "$_pip" ]; then okmsg "FAIL"
     elif _out=$("$_pip" install --user --quiet --timeout 30 sshow 2>&1); then okmsg "OK"
     elif _out=$("$_pip" install --user --quiet --timeout 30 --break-system-packages sshow 2>&1); then
       okmsg "OK"
