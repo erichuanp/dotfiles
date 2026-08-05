@@ -1,0 +1,95 @@
+#!/bin/sh
+# dotup — 工具更新检查器（手动触发：update / dotup）
+# A:全部更新 Y:更新该工具 N:暂不更新 I:跳过该版本 其他:退出
+set -u
+
+# 非交互环境直接退出
+[ -t 0 ] || exit 0
+
+STATE_DIR="$HOME/.config/dotup"
+IGNORE_FILE="$STATE_DIR/ignore"
+mkdir -p "$STATE_DIR"
+touch "$IGNORE_FILE"
+
+LIST=$(mktemp)
+trap 'rm -f "$LIST"' EXIT
+
+# ---- 收集可更新项，每行: backend|name|current|new
+OS=$(uname -s)
+
+if [ "$OS" = "Darwin" ]; then
+  # brew outdated --verbose: "fzf (0.44.1) < 0.46.0"
+  MANAGED="zsh tmux fzf ripgrep rg lsd vim curl git git-lfs gh node claude"
+  brew outdated --verbose 2>/dev/null | while IFS= read -r line; do
+    name=${line%% *}
+    case " $MANAGED " in *" $name "*) ;; *) continue ;; esac
+    cur=$(printf '%s' "$line" | sed -n 's/.*(\([^)]*\)).*/\1/p')
+    new=${line##* }
+    [ -n "$cur" ] && [ -n "$new" ] && printf 'brew|%s|%s|%s\n' "$name" "$cur" "$new"
+  done >> "$LIST"
+elif [ "$OS" = "Linux" ] && command -v apt-get >/dev/null 2>&1; then
+  # 用本地 apt 缓存（apt-daily 定时刷新），不跑 apt update
+  MANAGED="zsh tmux fzf ripgrep lsd vim curl git git-lfs gh nodejs npm"
+  apt list --upgradable 2>/dev/null | while IFS= read -r line; do
+    case "$line" in */*) ;; *) continue ;; esac
+    name=${line%%/*}
+    case " $MANAGED " in *" $name "*) ;; *) continue ;; esac
+    new=$(printf '%s' "$line" | awk '{print $2}')
+    cur=$(printf '%s' "$line" | sed -n 's/.*upgradable from: \([^]]*\)\].*/\1/p')
+    [ -n "$new" ] && printf 'apt|%s|%s|%s\n' "$name" "${cur:-?}" "$new"
+  done >> "$LIST"
+fi
+
+# npm 全局的 claude（Linux）
+if command -v npm >/dev/null 2>&1 && [ "$OS" = "Linux" ]; then
+  npm outdated -g --parseable @anthropic-ai/claude-code 2>/dev/null | while IFS=: read -r _loc _wanted current latest; do
+    cur=${current##*@}
+    new=${latest##*@}
+    [ -n "$cur" ] && [ -n "$new" ] && [ "$cur" != "$new" ] && \
+      printf 'npm|@anthropic-ai/claude-code|%s|%s\n' "$cur" "$new"
+  done >> "$LIST"
+fi
+
+[ -s "$LIST" ] || exit 0
+
+# ---- 交互循环
+# 非 root 首次用到 sudo 时验证（自带 3 次机会），失败则跳过需 sudo 的项
+SUDO=""
+sudo_state=""
+ensure_sudo() {
+  [ "$(id -u)" -eq 0 ] && return 0
+  [ "$sudo_state" = ok ] && return 0
+  [ "$sudo_state" = bad ] && return 1
+  if sudo -v </dev/tty; then sudo_state=ok; SUDO="sudo"; return 0; fi
+  sudo_state=bad
+  echo "dotup: sudo 验证失败，跳过需 sudo 的更新"
+  return 1
+}
+
+do_update() {
+  case "$1" in
+    apt)  ensure_sudo || return 0; $SUDO apt-get install --only-upgrade -y "$2" ;;
+    brew) brew upgrade "$2" ;;
+    npm)  ensure_sudo || return 0; $SUDO npm install -g "$2@latest" ;;
+  esac
+}
+
+ALL=no
+QUIT=no
+while IFS='|' read -r backend name cur new <&3; do
+  grep -qx "$name $new" "$IGNORE_FILE" 2>/dev/null && continue
+  [ "$QUIT" = yes ] && continue
+  if [ "$ALL" = yes ]; then
+    do_update "$backend" "$name"
+    continue
+  fi
+  printf 'dotup: %-28s %s -> %s  [A:全部更新 Y:更新该工具 N:暂不更新工具 I:跳过该版本 其他:暂不全部更新] ' "$name" "$cur" "$new"
+  read -r ans </dev/tty || { QUIT=yes; continue; }
+  case "$ans" in
+    Y|y) do_update "$backend" "$name" ;;
+    A|a) ALL=yes; do_update "$backend" "$name" ;;
+    N|n) ;;
+    I|i) echo "$name $new" >> "$IGNORE_FILE" ;;
+    *)   QUIT=yes ;;
+  esac
+done 3< "$LIST"

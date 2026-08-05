@@ -1,0 +1,7 @@
+# ~/.inputrc — dotfiles 受管。落到别人机器的 bash 时救命用
+$include /etc/inputrc
+"\e[A": history-search-backward
+"\e[B": history-search-forward
+set completion-ignore-case on
+set show-all-if-ambiguous on
+set bell-style none

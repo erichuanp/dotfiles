@@ -1,0 +1,25 @@
+#!/bin/sh
+# sfp <host> <port> [extra-url] — SSH 端口转发；不开浏览器，只打印可点击 URL
+set -u
+
+if [ $# -lt 2 ]; then
+  echo "usage: sfp <ssh-host> <port> [extra-url]" >&2
+  exit 1
+fi
+
+host=$1
+port=$2
+extra=${3:-}
+
+ip=$(ssh -G "$host" 2>/dev/null | awk '$1=="hostname"{print $2; exit}')
+
+echo "http://localhost:$port/"
+echo "https://localhost:$port/"
+if [ -n "$ip" ]; then
+  echo "http://$ip:$port/"
+  echo "https://$ip:$port/"
+fi
+[ -n "$extra" ] && echo "$extra"
+
+echo "[sfp] forwarding $port -> $host:127.0.0.1:$port  (Ctrl+C 退出)"
+exec ssh -N -L "$port:127.0.0.1:$port" "$host"

@@ -1,0 +1,18 @@
+[user]
+	name = erichuanp
+	email = erichuanp@gmail.com
+[init]
+	defaultBranch = main
+[core]
+	excludesfile = ~/.gitignore_global
+	pager = cat
+[submodule]
+	recurse = true
+[filter "lfs"]
+	clean = git-lfs clean -- %f
+	smudge = git-lfs smudge -- %f
+	process = git-lfs filter-process
+	required = true
+# 本机私有（编辑器、凭据助手等按机器/系统不同的东西）。必须放最后：后读的赢
+[include]
+	path = ~/.gitconfig.local
