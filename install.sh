@@ -71,12 +71,28 @@ if [ -z "$tier" ]; then
 fi
 
 case "$tier" in
-  1) FILES="$COMMON $HOSTONLY $PERSONAL" ;;
-  2) FILES="$COMMON $HOSTONLY" ;;
-  3) FILES="$SHARED" ;;
-  4) FILES="$COMMON" ;;
+  1) FILES="$COMMON $HOSTONLY $PERSONAL"; TIERNAME="个人设备" ;;
+  2) FILES="$COMMON $HOSTONLY";           TIERNAME="公司个人用户" ;;
+  3) FILES="$SHARED";                     TIERNAME="公司公用用户" ;;
+  4) FILES="$COMMON";                     TIERNAME="容器" ;;
   *) exit 1 ;;
 esac
+
+# 2/3/4 没有密码那道刹车，选错了会直接覆盖别人的文件，所以补一次确认。
+# 只在从菜单选的时候问：显式设了 DOTFILES_TIER 就是有意为之，容器构建也不该卡住。
+if [ -z "${DOTFILES_TIER:-}" ] && [ "$tier" != 1 ] && _has_tty; then
+  {
+    echo
+    echo "  本机：$(id -un)@$(hostname)   $HOME"
+    echo "  分级：$tier $TIERNAME"
+    printf '  继续？[y/N]: '
+  } > /dev/tty
+  read -r _yes < /dev/tty
+  case "$_yes" in
+    y|Y) ;;
+    *) echo "已取消"; exit 1 ;;
+  esac
+fi
 echo
 echo "开始安装..."
 echo
