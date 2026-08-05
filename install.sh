@@ -34,6 +34,10 @@ step() {
   printf '%*s' "$_pad" ''
 }
 okmsg() { echo "$1"; }
+# 容器里 /dev/tty 这个设备节点是存在的、权限位也可读，但没有控制终端，
+# 一打开就 "No such device or address"。所以不能用 [ -r /dev/tty ] 判断，
+# 必须真的开一次。
+_has_tty() { { : > /dev/tty; } 2>/dev/null; }
 # 换路提示要绕开 want 的 $(...) 捕获，直接写终端；没有 tty（容器构建）就退到 stderr
 _note() { printf '\n      %s ' "$1" > /dev/tty 2>/dev/null || printf '\n      %s ' "$1" >&2; }
 
@@ -49,7 +53,7 @@ SHARED='.zshrc .zprofile .gitconfig.erichuanp .local/bin/dotup .local/bin/sfp'
 
 tier="${DOTFILES_TIER:-}"
 if [ -z "$tier" ]; then
-  if [ -r /dev/tty ]; then
+  if _has_tty; then
     {
       echo "1. 个人设备      —— 需要密码"
       echo "2. 公司个人用户  —— 无 ssh"
@@ -219,6 +223,7 @@ chmod +x "$BIN/dotup" "$BIN/sfp" 2>/dev/null || :
 
 # ---------- 3/5 解密 ----------
 if [ "$tier" = 1 ]; then
+  _has_tty || { echo "1 级要输密码，但没有终端可读。用 DOTFILES_TIER 选别的级。" >&2; exit 1; }
   echo "SSH 文件解密..."
   printf 'Password: ' > /dev/tty
   stty -echo < /dev/tty 2>/dev/null || :
