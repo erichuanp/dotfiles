@@ -60,7 +60,8 @@ say "分级 $tier   $(uname -s) $(uname -m)"
 phase "0/5 网络"
 GHPROXY="${DOTFILES_GH_PROXY:-https://ghfast.top}"
 step "github.com 直连"
-if curl -fsS -o /dev/null --connect-timeout 6 --max-time 10 https://github.com/ 2>/dev/null; then
+# 超时给足：树莓派 / 弱网过旁路由时会慢，宁可多等也不要误判成被墙
+if curl -fsS -o /dev/null --connect-timeout 10 --max-time 25 --retry 1 https://github.com/ 2>/dev/null; then
   GHMODE=direct; okmsg "通"
 else
   GHMODE=proxy; okmsg "不通，改走 $GHPROXY"
@@ -292,11 +293,18 @@ done
 
 if [ "$tier" != 3 ]; then
   # sshow：和 ssh config 配套，pip 装，三端同一个命令
+  # sshow：和 ssh config 配套。新版 Debian/Ubuntu 有 PEP 668 限制，
+  # 普通 pip --user 会被拒，要加 --break-system-packages（装进用户目录，不动系统包）
   step "sshow"
   if have sshow; then okmsg "已有，跳过"
-  elif _out=$( { pip install --user --quiet --timeout 30 sshow 2>&1 || \
-                 pip3 install --user --quiet --timeout 30 sshow 2>&1; } ); then okmsg "已安装"
-  else okmsg "失败（跳过，需要 pip）"; fi
+  else
+    _pip=$(command -v pip3 || command -v pip || echo "")
+    if [ -z "$_pip" ]; then okmsg "失败（没有 pip）"
+    elif _out=$("$_pip" install --user --quiet --timeout 30 sshow 2>&1); then okmsg "已安装"
+    elif _out=$("$_pip" install --user --quiet --timeout 30 --break-system-packages sshow 2>&1); then
+      okmsg "已安装（--break-system-packages）"
+    else okmsg "失败（跳过）"; echo "$_out" | tail -3 | sed 's/^/        /'; fi
+  fi
 
   want dops ghraw Mikescher/better-docker-ps "dops_${osname}-${a2}"
 
