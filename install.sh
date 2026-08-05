@@ -15,7 +15,8 @@ BIN="$HOME/.local/bin"
 CURL_T='--connect-timeout 10 --max-time 300 --retry 2'
 export GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=30
 
-dot() { git --git-dir="$GITDIR" --work-tree="$HOME" "$@"; }
+GIT_NET=""   # socks 模式下填 -c http.proxy=...
+dot() { git $GIT_NET --git-dir="$GITDIR" --work-tree="$HOME" "$@"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 say() { echo "[dotfiles] $*"; }
 # step 只打印前缀不换行；卡住时你会看到一行没有结果的输出，一眼知道卡在哪
@@ -70,12 +71,43 @@ echo "平台：$(uname -s) $(uname -m)"
 # 国内机器 github.com:443 通常不通，但 raw / api / codeload / ssh:443 都通。
 # 探一次，不通就把所有 github.com 的 URL 走代理；push 走 ssh:443（代理是只读的）。
 GHPROXY="${DOTFILES_GH_PROXY:-https://ghfast.top}"
+SOCKS="${DOTFILES_SOCKS:-127.0.0.1:1080}"
+CURL_NET=""
+
+# 四级回退。反向 SOCKS 排在公共代理前面：它只转发 TCP，到 GitHub 的 TLS 是
+# 端到端的；ghfast 必须终止 TLS 再重新取，内容它全看得见（公开仓库无所谓，
+# 但能不给就不给）。
 step "github.com 连通性"
-# 超时给足：树莓派 / 弱网过旁路由时会慢，宁可多等也不要误判成被墙
 if curl -fsS -o /dev/null --connect-timeout 10 --max-time 25 --retry 1 https://github.com/ 2>/dev/null; then
   GHMODE=direct; okmsg "OK"
+elif curl -fsS -o /dev/null --socks5-hostname "$SOCKS" --connect-timeout 10 --max-time 25 \
+       https://github.com/ 2>/dev/null; then
+  # SSH 协议不允许服务端主动向客户端开通道，所以这条管子只能是上游机器连过来
+  # 的时候用 -R 铺好的。这里只负责发现它在不在。
+  GHMODE=socks; okmsg "直连不通 -> 反向 SOCKS $SOCKS"
+  CURL_NET="--socks5-hostname $SOCKS"
+  GIT_NET="-c http.proxy=socks5h://$SOCKS"
+elif curl -fsS -o /dev/null --connect-timeout 10 --max-time 25 "$GHPROXY/https://github.com/" 2>/dev/null; then
+  GHMODE=proxy; okmsg "直连不通 -> $GHPROXY"
 else
-  GHMODE=proxy; okmsg "不通 -> $GHPROXY"
+  okmsg "FAIL"
+  echo
+  echo "连不上 GitHub，三条路都不通：直连 / 反向 SOCKS($SOCKS) / $GHPROXY"
+  if [ -n "${SSH_CONNECTION:-}" ]; then
+    echo "这台机器是被 ssh 上来的。回到上游机器，用反向 SOCKS 重连再跑："
+    echo
+    echo "    ssh -R 1080 <本机>"
+    echo
+    echo "或者把这两行写进上游的 ~/.ssh/config，以后自动带上："
+    echo
+    echo "    Host <本机>"
+    echo "      RemoteForward 1080"
+  else
+    echo "安装失败，需要代理环境。"
+    echo "本机不是 ssh 会话，没有上游可借；请先让这台机器能上 GitHub，"
+    echo "或用 DOTFILES_GH_PROXY=<可用的代理> 重跑。"
+  fi
+  exit 1
 fi
 ghurl() {
   case "$1" in
@@ -90,12 +122,17 @@ if [ -d "$GITDIR" ]; then
   if dot fetch -q origin 2>/dev/null; then okmsg "OK"; else okmsg "FAIL（用本地副本继续）"; fi
 else
   step "clone 仓库"
-  if _out=$(git clone --bare -q "$(ghurl "$REPO")" "$GITDIR" 2>&1); then okmsg "OK"
+  if _out=$(git $GIT_NET clone --bare -q "$(ghurl "$REPO")" "$GITDIR" 2>&1); then okmsg "OK"
   else okmsg "FAIL"; echo "$_out" | head -4 | sed 's/^/        /'; exit 1; fi
 fi
-# 代理是只读的，push 必须走 ssh:443（国内唯一能连通 GitHub 的写入通道）
-if [ "$GHMODE" = proxy ]; then
+# 代理/SOCKS 都只解决拉取，push 必须走 ssh:443（国内唯一能连通 GitHub 的写入通道）
+if [ "$GHMODE" != direct ]; then
   dot remote set-url --push origin ssh://git@ssh.github.com:443/erichuanp/dotfiles.git 2>/dev/null || :
+fi
+# 代理模式把 fetch 地址也固化，以后 dot pull 不需要再想网络的事；
+# SOCKS 模式不固化 —— 那条管子不是常在的，写死了反而会在没隧道时挂掉
+if [ "$GHMODE" = proxy ]; then
+  dot remote set-url origin "$(ghurl "$REPO")" 2>/dev/null || :
 fi
 
 dot config core.bare false
@@ -187,10 +224,10 @@ case "$os" in Darwin) osname=macos ;; Linux) osname=linux ;; *) osname="" ;; esa
 # 代理模式下 github.com 根本不通，改用 api.github.com（国内可达）
 ghtag() {
   if [ "$GHMODE" = direct ]; then
-    curl -fsSLI --connect-timeout 10 --max-time 20 --retry 2 -o /dev/null -w '%{url_effective}' \
+    curl -fsSLI $CURL_NET --connect-timeout 10 --max-time 20 --retry 2 -o /dev/null -w '%{url_effective}' \
       "https://github.com/$1/releases/latest" | grep -o '/tag/[^/]*$' | sed 's#.*/tag/##'
   else
-    curl -fsSL --connect-timeout 10 --max-time 20 --retry 2 \
+    curl -fsSL $CURL_NET --connect-timeout 10 --max-time 20 --retry 2 \
       "https://api.github.com/repos/$1/releases/latest" \
       | grep -m1 '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/'
   fi
@@ -202,7 +239,7 @@ ghbin() {
   [ -n "$tag" ] || { echo "版本探测失败（连不上 github.com？）"; return 1; }
   asset=$(printf '%s' "$2" | sed "s/TAG/$tag/g; s/VER/${tag#v}/g")
   t=$(mktemp -d)
-  curl -fsSL $CURL_T "$(ghurl "https://github.com/$1/releases/download/$tag/$asset")" \
+  curl -fsSL $CURL_T $CURL_NET "$(ghurl "https://github.com/$1/releases/download/$tag/$asset")" \
     | tar -xz -C "$t" 2>/dev/null || :
   f=$(find "$t" -type f -name "$3" | head -1)
   if [ -n "$f" ]; then install -m755 "$f" "$BIN/$3"; rm -rf "$t"; return 0
@@ -214,7 +251,7 @@ ghraw() {
   tag=$(ghtag "$1" || :)
   [ -n "$tag" ] || { echo "版本探测失败（连不上 github.com？）"; return 1; }
   asset=$(printf '%s' "$2" | sed "s/TAG/$tag/g; s/VER/${tag#v}/g")
-  curl -fsSL $CURL_T "$(ghurl "https://github.com/$1/releases/download/$tag/$asset")" -o "$BIN/$3.part" \
+  curl -fsSL $CURL_T $CURL_NET "$(ghurl "https://github.com/$1/releases/download/$tag/$asset")" -o "$BIN/$3.part" \
     || { echo "下载失败：$asset"; return 1; }
   chmod +x "$BIN/$3.part" && mv "$BIN/$3.part" "$BIN/$3"
 }
@@ -290,13 +327,13 @@ esac
 ZSH_DIR="$HOME/.oh-my-zsh"
 step "oh-my-zsh"
 if [ -d "$ZSH_DIR" ]; then okmsg "SKIP"
-elif _out=$(git clone --depth 1 -q "$(ghurl https://github.com/ohmyzsh/ohmyzsh.git)" "$ZSH_DIR" 2>&1); then okmsg "OK"
+elif _out=$(git $GIT_NET clone --depth 1 -q "$(ghurl https://github.com/ohmyzsh/ohmyzsh.git)" "$ZSH_DIR" 2>&1); then okmsg "OK"
 else okmsg "FAIL"; echo "$_out" | head -3 | sed 's/^/        /'; fi
 for p in zsh-users/zsh-autosuggestions zsh-users/zsh-syntax-highlighting; do
   d="$ZSH_DIR/custom/plugins/${p#*/}"
   step "${p#*/}"
   if [ -d "$d" ]; then okmsg "SKIP"
-  elif _out=$(git clone --depth 1 -q "$(ghurl "https://github.com/$p")" "$d" 2>&1); then okmsg "OK"
+  elif _out=$(git $GIT_NET clone --depth 1 -q "$(ghurl "https://github.com/$p")" "$d" 2>&1); then okmsg "OK"
   else okmsg "FAIL"; fi
 done
 

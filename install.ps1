@@ -7,8 +7,11 @@ $Repo    = if ($env:DOTFILES_REPO) { $env:DOTFILES_REPO } else { 'https://github
 $GitDir  = Join-Path $HOME '.dotfiles'
 $Backup  = Join-Path $HOME 'tmp\.dotfiles-backup'
 $Proxy   = if ($env:DOTFILES_GH_PROXY) { $env:DOTFILES_GH_PROXY } else { 'https://ghfast.top' }
+$Socks   = if ($env:DOTFILES_SOCKS) { $env:DOTFILES_SOCKS } else { '127.0.0.1:1080' }
+$CurlNet = @()   # socks 模式下的 curl.exe 参数
+$GitNet  = @()   # socks 模式下的 git 参数
 
-function dot { & git --git-dir="$GitDir" --work-tree="$HOME" @args }
+function dot { & git @GitNet --git-dir="$GitDir" --work-tree="$HOME" @args }
 # step 只打印前缀不换行；卡住时你会看到一行没有结果的输出，一眼知道卡在哪
 function step($m) { Write-Host ("{0,-30}" -f "$m ...") -NoNewline }
 function okmsg($m) { Write-Host $m }
@@ -42,15 +45,49 @@ Write-Host "平台：Windows $env:PROCESSOR_ARCHITECTURE"
 
 # 国内机器 github.com:443 通常不通，raw 却是通的（所以这个脚本能下下来）。
 # 探一次，不通就把 github.com 的 URL 走代理；push 走 ssh:443（代理是只读的）。
+# 四级回退。反向 SOCKS 排在公共代理前面：它只转发 TCP，到 GitHub 的 TLS 是端到端的；
+# ghfast 必须终止 TLS 再重新取，内容它全看得见。
+# 用 curl.exe（Win10+ 自带）而不是 Invoke-WebRequest —— 后者不支持 SOCKS 代理。
+function Test-Url($extra) {
+    & curl.exe -fsS -o NUL @extra --connect-timeout 10 --max-time 25 'https://github.com/' 2>$null
+    return ($LASTEXITCODE -eq 0)
+}
 step 'github.com 连通性'
-$direct = $false
-try {
-    Invoke-WebRequest -Uri 'https://github.com/' -Method Head -TimeoutSec 25 -UseBasicParsing | Out-Null
-    $direct = $true
-} catch { $direct = $false }
-if ($direct) { okmsg 'OK' } else { okmsg "不通 -> $Proxy" }
+$mode = 'fail'
+if (Test-Url @()) { $mode = 'direct'; okmsg 'OK' }
+elseif (Test-Url @('--socks5-hostname', $Socks)) {
+    # SSH 协议不允许服务端主动向客户端开通道，这条管子只能是上游机器
+    # 连过来时用 -R 铺好的。这里只负责发现它在不在。
+    $mode = 'socks'; okmsg "直连不通 -> 反向 SOCKS $Socks"
+    $CurlNet = @('--socks5-hostname', $Socks)
+    $GitNet  = @('-c', "http.proxy=socks5h://$Socks")
+}
+elseif ((& curl.exe -fsS -o NUL --connect-timeout 10 --max-time 25 "$Proxy/https://github.com/" 2>$null; $LASTEXITCODE -eq 0)) {
+    $mode = 'proxy'; okmsg "直连不通 -> $Proxy"
+}
+else {
+    okmsg 'FAIL'
+    Write-Host ''
+    Write-Host "连不上 GitHub，三条路都不通：直连 / 反向 SOCKS($Socks) / $Proxy"
+    if ($env:SSH_CONNECTION) {
+        Write-Host '这台机器是被 ssh 上来的。回到上游机器，用反向 SOCKS 重连再跑：'
+        Write-Host ''
+        Write-Host '    ssh -R 1080 <本机>'
+        Write-Host ''
+        Write-Host '或者把这两行写进上游的 ~/.ssh/config，以后自动带上：'
+        Write-Host ''
+        Write-Host '    Host <本机>'
+        Write-Host '      RemoteForward 1080'
+    } else {
+        Write-Host '安装失败，需要代理环境。'
+        Write-Host '本机不是 ssh 会话，没有上游可借；请先让这台机器能上 GitHub，'
+        Write-Host '或用 $env:DOTFILES_GH_PROXY=<可用的代理> 重跑。'
+    }
+    exit 1
+}
+$direct = ($mode -eq 'direct')
 function ghurl($u) {
-    if (-not $direct -and $u -like 'https://github.com/*') { "$Proxy/$u" } else { $u }
+    if ($mode -eq 'proxy' -and $u -like 'https://github.com/*') { "$Proxy/$u" } else { $u }
 }
 
 if (Test-Path $GitDir) {
@@ -58,13 +95,16 @@ if (Test-Path $GitDir) {
     try { dot fetch -q origin; okmsg 'OK' } catch { okmsg 'FAIL（用本地副本继续）' }
 } else {
     step 'clone 仓库'
-    git clone --bare -q (ghurl $Repo) $GitDir
+    & git @GitNet clone --bare -q (ghurl $Repo) $GitDir
     if ($LASTEXITCODE -ne 0) { okmsg 'FAIL'; throw '拉不到仓库，检查网络' }
     okmsg 'OK'
 }
+# 代理/SOCKS 都只解决拉取，push 必须走 ssh:443
 if (-not $direct) {
     dot remote set-url --push origin 'ssh://git@ssh.github.com:443/erichuanp/dotfiles.git' 2>$null
 }
+# 代理模式把 fetch 地址也固化；SOCKS 模式不固化 —— 那条管子不是常在的
+if ($mode -eq 'proxy') { dot remote set-url origin (ghurl $Repo) 2>$null }
 
 dot config core.bare false
 dot config core.worktree "$HOME"
