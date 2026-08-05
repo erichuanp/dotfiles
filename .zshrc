@@ -156,7 +156,36 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
 
 # ---- dot：操作 dotfiles 仓库。$HOME 就是工作区，所以 `dot status` = 真实漂移
-dot() { git --git-dir="$HOME/.dotfiles" --work-tree="$HOME" "$@"; }
+dot() {
+  if [[ "${1:-}" == h ]]; then
+    cat <<'DOTHELP'
+Stage Files:
+# 对于无 SSH 的改动
+dot status  # 目前的改动
+dot add -u  # 将改动添加
+# 对于有 SSH 的改动
+dotseal
+
+Push:
+dot commit -m "提交信息"
+dot remote set-url origin git@github.com:erichuanp/dotfiles.git  # 只需跑一次
+dot push
+
+Pull:
+dot pull
+# 如果有 SSH 的改动
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -in ~/.ssh/config.enc -out ~/.ssh/config
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -in ~/.ssh/authorized_keys.enc -out ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/config ~/.ssh/authorized_keys
+# 重新进 Shell
+
+如果有不想纳管的文件，请用 *.local 来 append 到已纳管文件。
+  ~/.zshrc.local  ~/.bashrc.local  ~/.profile.local  ~/.gitconfig.local
+DOTHELP
+    return 0
+  fi
+  git --git-dir="$HOME/.dotfiles" --work-tree="$HOME" "$@"
+}
 
 # ---- dotseal：把明文 ~/.ssh/{config,authorized_keys} 重新加密回仓库
 #      改完必须跑一次，否则提交上去的还是旧密文

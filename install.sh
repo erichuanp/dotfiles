@@ -18,9 +18,18 @@ export GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=30
 dot() { git --git-dir="$GITDIR" --work-tree="$HOME" "$@"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 say() { echo "[dotfiles] $*"; }
-phase() { echo; echo "== $* =="; }
 # step 只打印前缀不换行；卡住时你会看到一行没有结果的输出，一眼知道卡在哪
-step() { printf '  %-32s' "$1 ..."; }
+# printf 的 %-30s 按字节数补齐，中文 3 字节却只占 2 列，直接用会歪。
+# wc -m 依赖 locale（没设时退化成字节数），所以直接扫字节：ASCII 记 1 列，
+# 多字节的首字节记 2 列，后续字节记 0 列 —— 对 ASCII+中文精确，且与 locale 无关。
+step() {
+  _lbl="$1 ..."
+  _w=$(printf '%s' "$_lbl" | od -An -tu1 \
+       | awk '{for(i=1;i<=NF;i++){if($i<128)w++; else if($i>=192)w+=2}} END{print w+0}')
+  printf '%s' "$_lbl"
+  _pad=$(( 30 - _w )); [ "$_pad" -lt 1 ] && _pad=1
+  printf '%*s' "$_pad" ''
+}
 okmsg() { echo "$1"; }
 
 have git || { echo "需要 git，先装 git" >&2; exit 1; }
@@ -34,9 +43,9 @@ tier="${DOTFILES_TIER:-}"
 if [ -z "$tier" ]; then
   if [ -r /dev/tty ]; then
     {
-      echo "  1) 个人设备      —— 全套，含 ssh config（需密码解密）+ authorized_keys"
-      echo "  2) 公司个人用户  —— 除 ssh 相关外全套"
-      echo "  3) 容器          —— 只有 shell/git/tmux 配置"
+      echo "1. 个人设备      —— 需要密码"
+      echo "2. 公司个人用户  —— 无 ssh"
+      echo "3. 容器          —— 仅有 shell/git/tmux 配置"
       printf '选择 [1/2/3]: '
     } > /dev/tty
     read -r tier < /dev/tty
@@ -50,21 +59,23 @@ case "$tier" in
   1) FILES="$COMMON $HOSTONLY $PERSONAL" ;;
   2) FILES="$COMMON $HOSTONLY" ;;
   3) FILES="$COMMON" ;;
-  *) echo "无效选择：$tier" >&2; exit 1 ;;
+  *) exit 1 ;;
 esac
-say "分级 $tier   $(uname -s) $(uname -m)"
+echo
+echo "开始安装..."
+echo
+echo "平台：$(uname -s) $(uname -m)"
 
 # ---------- 0/5 GitHub 可达性 ----------
 # 国内机器 github.com:443 通常不通，但 raw / api / codeload / ssh:443 都通。
 # 探一次，不通就把所有 github.com 的 URL 走代理；push 走 ssh:443（代理是只读的）。
-phase "0/5 网络"
 GHPROXY="${DOTFILES_GH_PROXY:-https://ghfast.top}"
-step "github.com 直连"
+step "github.com 连通性"
 # 超时给足：树莓派 / 弱网过旁路由时会慢，宁可多等也不要误判成被墙
 if curl -fsS -o /dev/null --connect-timeout 10 --max-time 25 --retry 1 https://github.com/ 2>/dev/null; then
-  GHMODE=direct; okmsg "通"
+  GHMODE=direct; okmsg "OK"
 else
-  GHMODE=proxy; okmsg "不通，改走 $GHPROXY"
+  GHMODE=proxy; okmsg "不通 -> $GHPROXY"
 fi
 ghurl() {
   case "$1" in
@@ -74,14 +85,13 @@ ghurl() {
 }
 
 # ---------- 1/5 取仓库 ----------
-phase "1/5 取仓库"
 if [ -d "$GITDIR" ]; then
-  step "已存在，fetch 更新"
-  if dot fetch -q origin 2>/dev/null; then okmsg "OK"; else okmsg "失败（用本地副本继续）"; fi
+  step "fetch 仓库"
+  if dot fetch -q origin 2>/dev/null; then okmsg "OK"; else okmsg "FAIL（用本地副本继续）"; fi
 else
   step "clone 仓库"
   if _out=$(git clone --bare -q "$(ghurl "$REPO")" "$GITDIR" 2>&1); then okmsg "OK"
-  else okmsg "失败"; echo "$_out" | head -4 | sed 's/^/        /'; exit 1; fi
+  else okmsg "FAIL"; echo "$_out" | head -4 | sed 's/^/        /'; exit 1; fi
 fi
 # 代理是只读的，push 必须走 ssh:443（国内唯一能连通 GitHub 的写入通道）
 if [ "$GHMODE" = proxy ]; then
@@ -108,11 +118,10 @@ cat > "$GITDIR/info/exclude" <<'EXC'
 /.profile.local
 /.gitconfig.local
 EXC
-say "分级清单已写入（$(echo $FILES | wc -w | tr -d ' ') 个文件）"
+
 
 # ---------- 2/5 铺文件 ----------
-phase "2/5 铺文件"
-step "备份同名旧文件"
+step "备份旧文件"
 _n=0
 for f in $FILES; do
   [ -e "$HOME/$f" ] || continue
@@ -120,20 +129,20 @@ for f in $FILES; do
   cp -p "$HOME/$f" "$BACKUP/$f"
   _n=$((_n+1))
 done
-okmsg "$_n 个 -> $BACKUP"
+okmsg "$_n 个 -> ~/.dotfiles-backup/"
 
-step "checkout"
+step "写入配置文件"
 if _out=$(dot checkout -f 2>&1); then okmsg "OK"
-else okmsg "失败"; echo "$_out" | head -6 | sed 's/^/        /'; exit 1; fi
+else okmsg "FAIL"; echo "$_out" | head -6 | sed 's/^/        /'; exit 1; fi
 dot reset -q
 
 [ -d "$HOME/.ssh" ] && chmod 700 "$HOME/.ssh"
 chmod +x "$BIN/dotup" "$BIN/sfp" 2>/dev/null || :
 
 # ---------- 3/5 解密 ----------
-phase "3/5 解密（仅 1 级）"
 if [ "$tier" = 1 ]; then
-  printf '解密密码（ssh config / authorized_keys）: ' > /dev/tty
+  echo "SSH 文件解密..."
+  printf 'Password: ' > /dev/tty
   stty -echo < /dev/tty 2>/dev/null || :
   read -r _pw < /dev/tty
   stty echo < /dev/tty 2>/dev/null || :
@@ -141,7 +150,7 @@ if [ "$tier" = 1 ]; then
   # 密码不是"检查"，是解密钥匙本身：错了就解不出东西，没有分支可以绕过
   for _f in config authorized_keys; do
     [ -f "$HOME/.ssh/$_f.enc" ] || continue
-    step "$_f"
+    step "  解密 .ssh/$_f"
     if openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -pass "pass:$_pw" \
          -in "$HOME/.ssh/$_f.enc" -out "$HOME/.ssh/$_f.new" 2>/dev/null; then
       mv "$HOME/.ssh/$_f.new" "$HOME/.ssh/$_f"
@@ -155,12 +164,9 @@ if [ "$tier" = 1 ]; then
     fi
   done
   unset _pw
-else
-  echo "  （跳过）"
 fi
 
 # ---------- 4/5 装工具 ----------
-phase "4/5 装工具"
 mkdir -p "$BIN"
 PATH="$BIN:$PATH"
 
@@ -212,9 +218,9 @@ ghraw() {
 want() {
   _c=$1; shift
   step "$_c"
-  if have "$_c"; then okmsg "已有，跳过"; return 0; fi
-  if _out=$("$@" "$_c" 2>&1); then okmsg "已安装"
-  else okmsg "失败（跳过）"; echo "$_out" | head -4 | sed 's/^/        /'; fi
+  if have "$_c"; then okmsg "SKIP"; return 0; fi
+  if _out=$("$@" "$_c" 2>&1); then okmsg "OK"
+  else okmsg "FAIL"; echo "$_out" | head -4 | sed 's/^/        /'; fi
   return 0
 }
 
@@ -224,17 +230,17 @@ Darwin)
     step "homebrew 本体"
     if _out=$(NONINTERACTIVE=1 /bin/bash -c \
         "$(curl -fsSL $CURL_T https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" 2>&1); then
-      okmsg "已安装"
-    else okmsg "失败（跳过）"; echo "$_out" | tail -3 | sed 's/^/        /'; fi
+      okmsg "OK"
+    else okmsg "FAIL"; echo "$_out" | tail -3 | sed 's/^/        /'; fi
   fi
   have brew || { [ -x /opt/homebrew/bin/brew ] && eval "$(/opt/homebrew/bin/brew shellenv)"; } || :
   have brew || { [ -x /usr/local/bin/brew ] && eval "$(/usr/local/bin/brew shellenv)"; } || :
   if have brew; then
     for pkg in zsh tmux fzf ripgrep lsd git-lfs gh node; do
-      step "brew $pkg"
-      if brew list "$pkg" >/dev/null 2>&1; then okmsg "已有，跳过"
-      elif _out=$(brew install "$pkg" 2>&1); then okmsg "已安装"
-      else okmsg "失败（跳过）"; echo "$_out" | tail -3 | sed 's/^/        /'; fi
+      step "$pkg"
+      if brew list "$pkg" >/dev/null 2>&1; then okmsg "SKIP"
+      elif _out=$(brew install "$pkg" 2>&1); then okmsg "OK"
+      else okmsg "FAIL"; echo "$_out" | tail -3 | sed 's/^/        /'; fi
     done
   else
     say "WARN: brew 不可用，跳过工具安装"
@@ -254,22 +260,22 @@ Linux)
   for p in zsh tmux vim curl; do have "$p" || base="$base $p"; done
   step "系统包$base"
   if [ -z "$base" ]; then
-    okmsg "都已有，跳过"
+    okmsg "SKIP"
   else
     SUDO=""; ok=yes
     if [ "$(id -u)" -ne 0 ]; then
-      okmsg "需要 sudo，下面会提示输密码（不想装就 Ctrl-C）"
+      okmsg "需要 sudo"
       sudo -v 2>/dev/null && SUDO="sudo" || ok=no
       step "  apt/apk 安装"
     fi
     if [ "$ok" = yes ] && have apt-get; then
-      if _out=$($SUDO apt-get update -qq 2>&1 && $SUDO apt-get install -y $base 2>&1); then okmsg "已安装"
-      else okmsg "失败（跳过）"; echo "$_out" | tail -3 | sed 's/^/        /'; fi
+      if _out=$($SUDO apt-get update -qq 2>&1 && $SUDO apt-get install -y $base 2>&1); then okmsg "OK"
+      else okmsg "FAIL"; echo "$_out" | tail -3 | sed 's/^/        /'; fi
     elif [ "$ok" = yes ] && have apk; then
-      if _out=$($SUDO apk add --no-cache $base 2>&1); then okmsg "已安装"
-      else okmsg "失败（跳过）"; fi
+      if _out=$($SUDO apk add --no-cache $base 2>&1); then okmsg "OK"
+      else okmsg "FAIL"; fi
     else
-      okmsg "拿不到 sudo，跳过"
+      okmsg "SKIP（无 sudo）"
     fi
   fi
   MINICONDA_OS=Linux
@@ -277,18 +283,17 @@ Linux)
 esac
 
 # ---------- 5/5 oh-my-zsh 与其余 ----------
-phase "5/5 oh-my-zsh 与其余"
 ZSH_DIR="$HOME/.oh-my-zsh"
 step "oh-my-zsh"
-if [ -d "$ZSH_DIR" ]; then okmsg "已有，跳过"
-elif _out=$(git clone --depth 1 -q "$(ghurl https://github.com/ohmyzsh/ohmyzsh.git)" "$ZSH_DIR" 2>&1); then okmsg "已安装"
-else okmsg "失败（跳过）"; echo "$_out" | head -3 | sed 's/^/        /'; fi
+if [ -d "$ZSH_DIR" ]; then okmsg "SKIP"
+elif _out=$(git clone --depth 1 -q "$(ghurl https://github.com/ohmyzsh/ohmyzsh.git)" "$ZSH_DIR" 2>&1); then okmsg "OK"
+else okmsg "FAIL"; echo "$_out" | head -3 | sed 's/^/        /'; fi
 for p in zsh-users/zsh-autosuggestions zsh-users/zsh-syntax-highlighting; do
   d="$ZSH_DIR/custom/plugins/${p#*/}"
   step "${p#*/}"
-  if [ -d "$d" ]; then okmsg "已有，跳过"
-  elif _out=$(git clone --depth 1 -q "$(ghurl "https://github.com/$p")" "$d" 2>&1); then okmsg "已安装"
-  else okmsg "失败（跳过）"; fi
+  if [ -d "$d" ]; then okmsg "SKIP"
+  elif _out=$(git clone --depth 1 -q "$(ghurl "https://github.com/$p")" "$d" 2>&1); then okmsg "OK"
+  else okmsg "FAIL"; fi
 done
 
 if [ "$tier" != 3 ]; then
@@ -296,26 +301,26 @@ if [ "$tier" != 3 ]; then
   # sshow：和 ssh config 配套。新版 Debian/Ubuntu 有 PEP 668 限制，
   # 普通 pip --user 会被拒，要加 --break-system-packages（装进用户目录，不动系统包）
   step "sshow"
-  if have sshow; then okmsg "已有，跳过"
+  if have sshow; then okmsg "SKIP"
   else
     _pip=$(command -v pip3 || command -v pip || echo "")
-    if [ -z "$_pip" ]; then okmsg "失败（没有 pip）"
-    elif _out=$("$_pip" install --user --quiet --timeout 30 sshow 2>&1); then okmsg "已安装"
+    if [ -z "$_pip" ]; then okmsg "FAIL（没有 pip）"
+    elif _out=$("$_pip" install --user --quiet --timeout 30 sshow 2>&1); then okmsg "OK"
     elif _out=$("$_pip" install --user --quiet --timeout 30 --break-system-packages sshow 2>&1); then
-      okmsg "已安装（--break-system-packages）"
-    else okmsg "失败（跳过）"; echo "$_out" | tail -3 | sed 's/^/        /'; fi
+      okmsg "OK"
+    else okmsg "FAIL"; echo "$_out" | tail -3 | sed 's/^/        /'; fi
   fi
 
   want dops ghraw Mikescher/better-docker-ps "dops_${osname}-${a2}"
 
   step "node (nvm)"
-  if have node || [ -s "$HOME/.nvm/nvm.sh" ]; then okmsg "已有，跳过"
+  if have node || [ -s "$HOME/.nvm/nvm.sh" ]; then okmsg "SKIP"
   else
-    okmsg "安装中（会拉 nvm 再装 LTS，慢是正常的）"
+    okmsg "安装中"
     step "  nvm + node"
     if _out=$( { curl -fsSL $CURL_T https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash; \
-                 bash -c '. "$HOME/.nvm/nvm.sh" && nvm install --lts'; } 2>&1 ); then okmsg "已安装"
-    else okmsg "失败（跳过）"; echo "$_out" | tail -3 | sed 's/^/        /'; fi
+                 bash -c '. "$HOME/.nvm/nvm.sh" && nvm install --lts'; } 2>&1 ); then okmsg "OK"
+    else okmsg "FAIL"; echo "$_out" | tail -3 | sed 's/^/        /'; fi
   fi
 
   conda_found=no
@@ -323,19 +328,21 @@ if [ "$tier" != 3 ]; then
     [ -f "$d/etc/profile.d/conda.sh" ] && conda_found=yes && break
   done
   step "miniconda"
-  if [ "$conda_found" = yes ]; then okmsg "已有，跳过"
-  elif [ -z "${MINICONDA_OS:-}" ]; then okmsg "该系统不支持，跳过"
+  if [ "$conda_found" = yes ]; then okmsg "SKIP"
+  elif [ -z "${MINICONDA_OS:-}" ]; then okmsg "SKIP"
   else
-    okmsg "下载中（约 100MB，慢是正常的）"
+    okmsg "下载中（约 100MB）"
     step "  下载并安装"
     if _out=$(curl -fsSL --connect-timeout 10 --max-time 900 \
                 "https://repo.anaconda.com/miniconda/Miniconda3-latest-$MINICONDA_OS-$(uname -m).sh" \
                 -o /tmp/miniconda.sh 2>&1 && bash /tmp/miniconda.sh -b -p "$HOME/miniconda3" 2>&1); then
       rm -f /tmp/miniconda.sh
-      okmsg "已安装"
-    else okmsg "失败（跳过）"; echo "$_out" | tail -3 | sed 's/^/        /'; fi
+      okmsg "OK"
+    else okmsg "FAIL"; echo "$_out" | tail -3 | sed 's/^/        /'; fi
   fi
 fi
 
 echo
-say "完成。用 \`dot status\` 看改动，\`exec zsh\` 进新环境。"
+echo "安装完成。"
+echo "请重新进 Shell"
+echo "dot h  # 同步教程"
