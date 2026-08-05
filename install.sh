@@ -8,7 +8,7 @@ set -eu
 
 REPO="${DOTFILES_REPO:-https://github.com/erichuanp/dotfiles.git}"
 GITDIR="$HOME/.dotfiles"
-BACKUP="$HOME/.dotfiles-backup"
+BACKUP="$HOME/tmp/.dotfiles-backup"
 BIN="$HOME/.local/bin"
 
 # 所有网络操作都必须有上限。只设 connect-timeout 不够 —— 连上之后传输停滞会永远挂着
@@ -121,15 +121,19 @@ EXC
 
 
 # ---------- 2/5 铺文件 ----------
-step "备份旧文件"
+step "备份不同旧文件"
 _n=0
 for f in $FILES; do
+  # 加密文件直接覆盖：明文才是本体，密文备份了也没用
+  case "$f" in *.enc) continue ;; esac
   [ -e "$HOME/$f" ] || continue
+  # 内容和仓库里一模一样就没必要备份，免得 backup 目录里全是噪音
+  if dot show "HEAD:$f" 2>/dev/null | cmp -s - "$HOME/$f"; then continue; fi
   mkdir -p "$BACKUP/$(dirname "$f")"
   cp -p "$HOME/$f" "$BACKUP/$f"
   _n=$((_n+1))
 done
-okmsg "$_n 个 -> ~/.dotfiles-backup/"
+okmsg "$_n 个 -> ~/tmp/.dotfiles-backup/"
 
 step "写入配置文件"
 if _out=$(dot checkout -f 2>&1); then okmsg "OK"
@@ -150,7 +154,7 @@ if [ "$tier" = 1 ]; then
   # 密码不是"检查"，是解密钥匙本身：错了就解不出东西，没有分支可以绕过
   for _f in config authorized_keys; do
     [ -f "$HOME/.ssh/$_f.enc" ] || continue
-    step "  解密 .ssh/$_f"
+    step "  解密 $_f"
     if openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -pass "pass:$_pw" \
          -in "$HOME/.ssh/$_f.enc" -out "$HOME/.ssh/$_f.new" 2>/dev/null; then
       mv "$HOME/.ssh/$_f.new" "$HOME/.ssh/$_f"
