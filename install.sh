@@ -403,7 +403,7 @@ case "$tier" in 1|2)
   if have sshow; then okmsg "SKIP"
   else
     _pip=$(command -v pip3 || command -v pip || echo "")
-    if [ -z "$_pip" ]; then okmsg "FAIL"
+    if [ -z "$_pip" ]; then okmsg "FAIL"; echo "        这台机器没有 pip"
     elif _out=$("$_pip" install --user --quiet --timeout 30 sshow 2>&1); then okmsg "OK"
     elif _out=$("$_pip" install --user --quiet --timeout 30 --break-system-packages sshow 2>&1); then
       okmsg "OK"
