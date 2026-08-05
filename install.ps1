@@ -99,10 +99,16 @@ if (Test-Path $GitDir) {
     if ($LASTEXITCODE -ne 0) { okmsg 'FAIL'; throw '拉不到仓库，检查网络' }
     okmsg 'OK'
 }
-# 代理/SOCKS 都只解决拉取，push 必须走 ssh:443
-if (-not $direct) {
+# push 一律走 SSH：HTTPS 推送要 PAT，GitHub 早就不收密码了。
+if ($direct) {
+    dot remote set-url --push origin 'git@github.com:erichuanp/dotfiles.git' 2>$null
+} else {
     dot remote set-url --push origin 'ssh://git@ssh.github.com:443/erichuanp/dotfiles.git' 2>$null
 }
+# --bare clone 不建远程跟踪分支，push 会说 no upstream；换标准 refspec 并建好跟踪
+dot config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+dot fetch -q origin 2>$null
+dot branch --set-upstream-to=origin/main main 2>$null | Out-Null
 # 代理模式把 fetch 地址也固化；SOCKS 模式不固化 —— 那条管子不是常在的
 if ($mode -eq 'proxy') { dot remote set-url origin (ghurl $Repo) 2>$null }
 

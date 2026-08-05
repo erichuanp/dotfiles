@@ -149,7 +149,6 @@ dotseal
 
 Push:
 dot commit -m "提交信息"
-dot remote set-url origin git@github.com:erichuanp/dotfiles.git  # 只需跑一次
 dot push
 
 Pull:

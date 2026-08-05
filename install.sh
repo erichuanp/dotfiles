@@ -125,10 +125,18 @@ else
   if _out=$(git $GIT_NET clone --bare -q "$(ghurl "$REPO")" "$GITDIR" 2>&1); then okmsg "OK"
   else okmsg "FAIL"; echo "$_out" | head -4 | sed 's/^/        /'; exit 1; fi
 fi
-# 代理/SOCKS 都只解决拉取，push 必须走 ssh:443（国内唯一能连通 GitHub 的写入通道）
-if [ "$GHMODE" != direct ]; then
+# push 一律走 SSH：HTTPS 推送要 PAT，GitHub 早就不收密码了。
+# 直连用标准 22 端口；国内节点用 ssh.github.com:443（22 通常被墙）。
+if [ "$GHMODE" = direct ]; then
+  dot remote set-url --push origin git@github.com:erichuanp/dotfiles.git 2>/dev/null || :
+else
   dot remote set-url --push origin ssh://git@ssh.github.com:443/erichuanp/dotfiles.git 2>/dev/null || :
 fi
+# --bare clone 的 refspec 直接写 refs/heads/*，不建远程跟踪分支，于是 push 会说
+# "no upstream"。换成标准 refspec 并建好跟踪，以后 dot push / dot pull 都不用带参数。
+dot config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+dot fetch -q origin 2>/dev/null || :
+dot branch --set-upstream-to=origin/main main >/dev/null 2>&1 || :
 # 代理模式把 fetch 地址也固化，以后 dot pull 不需要再想网络的事；
 # SOCKS 模式不固化 —— 那条管子不是常在的，写死了反而会在没隧道时挂掉
 if [ "$GHMODE" = proxy ]; then
