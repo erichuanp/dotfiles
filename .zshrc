@@ -115,13 +115,6 @@ alias update='dotup'
 
 alias ls='lsd'
 alias ll='lsd -la'
-# ${#funcstack} == 1 表示是在命令行直接敲的。脚本或被 source 的文件里调 cd
-# 时深度 >= 2，那时不该多打一屏 ls 去污染人家的输出
-cd() {
-  builtin cd "$@" || return
-  (( ${#funcstack} == 1 )) && ls
-  return 0
-}
 lst() {
   if [ $# -eq 0 ]; then
     lsd --tree
@@ -129,24 +122,6 @@ lst() {
     lsd --tree --depth "$1"
   fi
 }
-# 同上：只有命令行直接敲 mkdir 才自动进去。
-# 否则 oh-my-zsh 启动时的 `mkdir -p $ZSH_CACHE_DIR/completions` 会把你传送走
-mkdir() {
-  command mkdir -p "$@" || return
-  local dirs=(${@:#-*})
-  (( ${#funcstack} == 1 )) && (( $#dirs == 1 )) && [[ -o interactive ]] && cd -- $dirs[1]
-  return 0
-}
-# docker ps -> dops（better-docker-ps）。没装 dops 就原样透传，容器里天然无害
-docker() {
-  if [[ "$1" == "ps" ]] && command -v dops >/dev/null 2>&1; then
-    shift
-    DOCKER_HOST=${DOCKER_HOST:-unix://$HOME/.orbstack/run/docker.sock} dops "$@"
-  else
-    command docker "$@"
-  fi
-}
-
 # ---- conda：取第一个命中的安装位置；不自动激活 base
 for _conda_root in "$HOME/miniconda3" "$HOME/anaconda3" /opt/miniconda3 /opt/anaconda3; do
   if [ -f "$_conda_root/etc/profile.d/conda.sh" ]; then
@@ -228,6 +203,40 @@ zshrc() {
       print -z "source $rc"
       ;;
   esac
+}
+
+# ============================================================
+# 标准命令包装 —— 必须放在最底下
+# 上面的 oh-my-zsh / compinit 等启动代码里会调 mkdir、cd，
+# 定义在它们之后，那些代码就只会碰到真命令。
+# （funcstack 守卫仍然要留：重新 source 时上一轮的包装还在内存里，
+#   光靠位置挡不住。）
+# ============================================================
+
+# ${#funcstack} == 1 表示是在命令行直接敲的。脚本或被 source 的文件里调 cd
+# 时深度 >= 2，那时不该多打一屏 ls 去污染人家的输出
+cd() {
+  builtin cd "$@" || return
+  (( ${#funcstack} == 1 )) && ls
+  return 0
+}
+
+# 同上：只有命令行直接敲 mkdir 才自动进去。
+# 否则 oh-my-zsh 启动时的 `mkdir -p $ZSH_CACHE_DIR/completions` 会把你传送走
+mkdir() {
+  command mkdir -p "$@" || return
+  local dirs=(${@:#-*})
+  (( ${#funcstack} == 1 )) && (( $#dirs == 1 )) && [[ -o interactive ]] && cd -- $dirs[1]
+  return 0
+}
+# docker ps -> dops（better-docker-ps）。没装 dops 就原样透传，容器里天然无害
+docker() {
+  if [[ "$1" == "ps" ]] && command -v dops >/dev/null 2>&1; then
+    shift
+    DOCKER_HOST=${DOCKER_HOST:-unix://$HOME/.orbstack/run/docker.sock} dops "$@"
+  else
+    command docker "$@"
+  fi
 }
 
 # ---- 本机私有补充（必须放最后：让本机能覆盖上面任何设定）
