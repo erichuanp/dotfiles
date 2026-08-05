@@ -115,8 +115,12 @@ alias update='dotup'
 
 alias ls='lsd'
 alias ll='lsd -la'
+# ${#funcstack} == 1 表示是在命令行直接敲的。脚本或被 source 的文件里调 cd
+# 时深度 >= 2，那时不该多打一屏 ls 去污染人家的输出
 cd() {
-  builtin cd "$@" && ls
+  builtin cd "$@" || return
+  (( ${#funcstack} == 1 )) && ls
+  return 0
 }
 lst() {
   if [ $# -eq 0 ]; then
@@ -125,10 +129,12 @@ lst() {
     lsd --tree --depth "$1"
   fi
 }
+# 同上：只有命令行直接敲 mkdir 才自动进去。
+# 否则 oh-my-zsh 启动时的 `mkdir -p $ZSH_CACHE_DIR/completions` 会把你传送走
 mkdir() {
   command mkdir -p "$@" || return
   local dirs=(${@:#-*})
-  [[ -o interactive ]] && (( $#dirs == 1 )) && cd -- $dirs[1]
+  (( ${#funcstack} == 1 )) && (( $#dirs == 1 )) && [[ -o interactive ]] && cd -- $dirs[1]
   return 0
 }
 # docker ps -> dops（better-docker-ps）。没装 dops 就原样透传，容器里天然无害
