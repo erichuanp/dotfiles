@@ -37,7 +37,9 @@ okmsg() { echo "$1"; }
 # 容器里 /dev/tty 这个设备节点是存在的、权限位也可读，但没有控制终端，
 # 一打开就 "No such device or address"。所以不能用 [ -r /dev/tty ] 判断，
 # 必须真的开一次。
-_has_tty() { { : > /dev/tty; } 2>/dev/null; }
+# 必须放在子 shell 里：`:` 是 POSIX 特殊内建，特殊内建上的重定向失败会让
+# 非交互 shell 直接退出（dash 严格照做，bash 不），子 shell 把它挡住。
+_has_tty() { ( : > /dev/tty ) 2>/dev/null; }
 # 换路提示要绕开 want 的 $(...) 捕获，直接写终端；没有 tty（容器构建）就退到 stderr
 _note() { printf '\n      %s ' "$1" > /dev/tty 2>/dev/null || printf '\n      %s ' "$1" >&2; }
 
