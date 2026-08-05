@@ -209,28 +209,33 @@ zshrc() {
 # 标准命令包装 —— 必须放在最底下
 # 上面的 oh-my-zsh / compinit 等启动代码里会调 mkdir、cd，
 # 定义在它们之后，那些代码就只会碰到真命令。
-# （funcstack 守卫仍然要留：重新 source 时上一轮的包装还在内存里，
-#   光靠位置挡不住。）
+#
+# 每个包装第一行都先问一句：是人在命令行敲的吗？
+#   ${#funcstack} == 1  → 是，走包装
+#   否则（脚本里、函数里、被 source 的文件里）→ 原样转发给原生命令
+# 这样脚本拿到的永远是标准行为：mkdir 不会被偷加 -p，docker ps 不会变成
+# dops（输出格式不同会把解析脚本搞挂），cd 不会往 stdout 吐一屏文件名。
+# 想在命令行强制走原生：command mkdir / builtin cd。
 # ============================================================
 
-# ${#funcstack} == 1 表示是在命令行直接敲的。脚本或被 source 的文件里调 cd
-# 时深度 >= 2，那时不该多打一屏 ls 去污染人家的输出
 cd() {
+  (( ${#funcstack} == 1 )) || { builtin cd "$@"; return }
   builtin cd "$@" || return
-  (( ${#funcstack} == 1 )) && ls
+  ls
   return 0
 }
 
-# 同上：只有命令行直接敲 mkdir 才自动进去。
-# 否则 oh-my-zsh 启动时的 `mkdir -p $ZSH_CACHE_DIR/completions` 会把你传送走
 mkdir() {
+  (( ${#funcstack} == 1 )) || { command mkdir "$@"; return }
   command mkdir -p "$@" || return
   local dirs=(${@:#-*})
-  (( ${#funcstack} == 1 )) && (( $#dirs == 1 )) && [[ -o interactive ]] && cd -- $dirs[1]
+  (( $#dirs == 1 )) && [[ -o interactive ]] && cd -- $dirs[1]
   return 0
 }
-# docker ps -> dops（better-docker-ps）。没装 dops 就原样透传，容器里天然无害
+
+# docker ps -> dops（better-docker-ps）。没装 dops 就原样透传
 docker() {
+  (( ${#funcstack} == 1 )) || { command docker "$@"; return }
   if [[ "$1" == "ps" ]] && command -v dops >/dev/null 2>&1; then
     shift
     DOCKER_HOST=${DOCKER_HOST:-unix://$HOME/.orbstack/run/docker.sock} dops "$@"
