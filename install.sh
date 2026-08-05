@@ -54,6 +54,24 @@ case "$tier" in
 esac
 say "分级 $tier   $(uname -s) $(uname -m)"
 
+# ---------- 0/5 GitHub 可达性 ----------
+# 国内机器 github.com:443 通常不通，但 raw / api / codeload / ssh:443 都通。
+# 探一次，不通就把所有 github.com 的 URL 走代理；push 走 ssh:443（代理是只读的）。
+phase "0/5 网络"
+GHPROXY="${DOTFILES_GH_PROXY:-https://ghfast.top}"
+step "github.com 直连"
+if curl -fsS -o /dev/null --connect-timeout 6 --max-time 10 https://github.com/ 2>/dev/null; then
+  GHMODE=direct; okmsg "通"
+else
+  GHMODE=proxy; okmsg "不通，改走 $GHPROXY"
+fi
+ghurl() {
+  case "$1" in
+    https://github.com/*) [ "$GHMODE" = proxy ] && echo "$GHPROXY/$1" || echo "$1" ;;
+    *) echo "$1" ;;
+  esac
+}
+
 # ---------- 1/5 取仓库 ----------
 phase "1/5 取仓库"
 if [ -d "$GITDIR" ]; then
@@ -61,8 +79,12 @@ if [ -d "$GITDIR" ]; then
   if dot fetch -q origin 2>/dev/null; then okmsg "OK"; else okmsg "失败（用本地副本继续）"; fi
 else
   step "clone 仓库"
-  if git clone --bare -q "$REPO" "$GITDIR" 2>/dev/null; then okmsg "OK"
-  else okmsg "失败"; echo "  拉不到仓库，检查网络或 REPO 地址" >&2; exit 1; fi
+  if _out=$(git clone --bare -q "$(ghurl "$REPO")" "$GITDIR" 2>&1); then okmsg "OK"
+  else okmsg "失败"; echo "$_out" | head -4 | sed 's/^/        /'; exit 1; fi
+fi
+# 代理是只读的，push 必须走 ssh:443（国内唯一能连通 GitHub 的写入通道）
+if [ "$GHMODE" = proxy ]; then
+  dot remote set-url --push origin ssh://git@ssh.github.com:443/erichuanp/dotfiles.git 2>/dev/null || :
 fi
 
 dot config core.bare false
@@ -150,10 +172,17 @@ case "$(uname -m)" in
 esac
 case "$os" in Darwin) osname=macos ;; Linux) osname=linux ;; *) osname="" ;; esac
 
-# 取 releases/latest 的重定向拿版本号，不碰 GitHub API，免限流
+# 直连时走 releases/latest 的重定向拿版本号，不碰 API 免限流；
+# 代理模式下 github.com 根本不通，改用 api.github.com（国内可达）
 ghtag() {
-  curl -fsSLI --connect-timeout 10 --max-time 20 --retry 2 -o /dev/null -w '%{url_effective}' \
-    "https://github.com/$1/releases/latest" | grep -o '/tag/[^/]*$' | sed 's#.*/tag/##'
+  if [ "$GHMODE" = direct ]; then
+    curl -fsSLI --connect-timeout 10 --max-time 20 --retry 2 -o /dev/null -w '%{url_effective}' \
+      "https://github.com/$1/releases/latest" | grep -o '/tag/[^/]*$' | sed 's#.*/tag/##'
+  else
+    curl -fsSL --connect-timeout 10 --max-time 20 --retry 2 \
+      "https://api.github.com/repos/$1/releases/latest" \
+      | grep -m1 '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/'
+  fi
 }
 # ghbin <repo> <tar.gz 资产名，TAG/VER 占位> <二进制名>
 ghbin() {
@@ -162,7 +191,7 @@ ghbin() {
   [ -n "$tag" ] || { echo "版本探测失败（连不上 github.com？）"; return 1; }
   asset=$(printf '%s' "$2" | sed "s/TAG/$tag/g; s/VER/${tag#v}/g")
   t=$(mktemp -d)
-  curl -fsSL $CURL_T "https://github.com/$1/releases/download/$tag/$asset" \
+  curl -fsSL $CURL_T "$(ghurl "https://github.com/$1/releases/download/$tag/$asset")" \
     | tar -xz -C "$t" 2>/dev/null || :
   f=$(find "$t" -type f -name "$3" | head -1)
   if [ -n "$f" ]; then install -m755 "$f" "$BIN/$3"; rm -rf "$t"; return 0
@@ -174,7 +203,7 @@ ghraw() {
   tag=$(ghtag "$1" || :)
   [ -n "$tag" ] || { echo "版本探测失败（连不上 github.com？）"; return 1; }
   asset=$(printf '%s' "$2" | sed "s/TAG/$tag/g; s/VER/${tag#v}/g")
-  curl -fsSL $CURL_T "https://github.com/$1/releases/download/$tag/$asset" -o "$BIN/$3.part" \
+  curl -fsSL $CURL_T "$(ghurl "https://github.com/$1/releases/download/$tag/$asset")" -o "$BIN/$3.part" \
     || { echo "下载失败：$asset"; return 1; }
   chmod +x "$BIN/$3.part" && mv "$BIN/$3.part" "$BIN/$3"
 }
@@ -251,13 +280,13 @@ phase "5/5 oh-my-zsh 与其余"
 ZSH_DIR="$HOME/.oh-my-zsh"
 step "oh-my-zsh"
 if [ -d "$ZSH_DIR" ]; then okmsg "已有，跳过"
-elif _out=$(git clone --depth 1 -q https://github.com/ohmyzsh/ohmyzsh.git "$ZSH_DIR" 2>&1); then okmsg "已安装"
+elif _out=$(git clone --depth 1 -q "$(ghurl https://github.com/ohmyzsh/ohmyzsh.git)" "$ZSH_DIR" 2>&1); then okmsg "已安装"
 else okmsg "失败（跳过）"; echo "$_out" | head -3 | sed 's/^/        /'; fi
 for p in zsh-users/zsh-autosuggestions zsh-users/zsh-syntax-highlighting; do
   d="$ZSH_DIR/custom/plugins/${p#*/}"
   step "${p#*/}"
   if [ -d "$d" ]; then okmsg "已有，跳过"
-  elif _out=$(git clone --depth 1 -q "https://github.com/$p" "$d" 2>&1); then okmsg "已安装"
+  elif _out=$(git clone --depth 1 -q "$(ghurl "https://github.com/$p")" "$d" 2>&1); then okmsg "已安装"
   else okmsg "失败（跳过）"; fi
 done
 
