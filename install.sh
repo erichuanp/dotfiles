@@ -12,7 +12,9 @@ BACKUP="$HOME/tmp/.dotfiles-backup"
 BIN="$HOME/.local/bin"
 
 # 所有网络操作都必须有上限。只设 connect-timeout 不够 —— 连上之后传输停滞会永远挂着
-CURL_T='--connect-timeout 10 --max-time 300 --retry 2'
+# --max-time 是总上限，防不住"连上了但不动"。真正管用的是 --speed-limit/--speed-time：
+# 30 秒内平均速度低于 1KB/s 就放弃，交给 _dl 换下一条路，不用干等 5 分钟。
+CURL_T='--connect-timeout 10 --max-time 300 --speed-limit 1024 --speed-time 30 --retry 1' 
 export GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=30
 
 GIT_NET=""   # socks 模式下填 -c http.proxy=...
@@ -74,16 +76,21 @@ GHPROXY="${DOTFILES_GH_PROXY:-https://ghfast.top}"
 SOCKS="${DOTFILES_SOCKS:-127.0.0.1:1080}"
 CURL_NET=""
 
-# 四级回退。反向 SOCKS 排在公共代理前面：它只转发 TCP，到 GitHub 的 TLS 是
-# 端到端的；ghfast 必须终止 TLS 再重新取，内容它全看得见（公开仓库无所谓，
-# 但能不给就不给）。
+# 反向 SOCKS 单独探一次，不管直连通不通 —— 后面某个下载卡住时要拿它兜底。
+# 没有隧道时连 127.0.0.1:1080 会立刻 connection refused，不拖时间。
+SOCKS_OK=no
+if curl -fsS -o /dev/null --socks5-hostname "$SOCKS" --connect-timeout 5 --max-time 12 \
+     https://github.com/ 2>/dev/null; then
+  # SSH 协议不允许服务端主动向客户端开通道，这条管子只能是上游机器连过来时用
+  # -R 铺好的。脚本只负责发现它在不在。
+  SOCKS_OK=yes
+fi
+
 step "github.com 连通性"
 if curl -fsS -o /dev/null --connect-timeout 10 --max-time 25 --retry 1 https://github.com/ 2>/dev/null; then
-  GHMODE=direct; okmsg "OK"
-elif curl -fsS -o /dev/null --socks5-hostname "$SOCKS" --connect-timeout 10 --max-time 25 \
-       https://github.com/ 2>/dev/null; then
-  # SSH 协议不允许服务端主动向客户端开通道，所以这条管子只能是上游机器连过来
-  # 的时候用 -R 铺好的。这里只负责发现它在不在。
+  GHMODE=direct
+  if [ "$SOCKS_OK" = yes ]; then okmsg "OK（反向 SOCKS 也在，可兜底）"; else okmsg "OK"; fi
+elif [ "$SOCKS_OK" = yes ]; then
   GHMODE=socks; okmsg "直连不通 -> 反向 SOCKS $SOCKS"
   CURL_NET="--socks5-hostname $SOCKS"
   GIT_NET="-c http.proxy=socks5h://$SOCKS"
@@ -114,6 +121,20 @@ ghurl() {
     https://github.com/*) [ "$GHMODE" = proxy ] && echo "$GHPROXY/$1" || echo "$1" ;;
     *) echo "$1" ;;
   esac
+}
+
+# _dl <github 原始 url> <输出文件>
+# 探测通过不代表后面每个下载都顺 —— 国内到 GitHub 常见"握手成功、传到一半停住"。
+# 所以每个下载各自带回退，而不是一次探测定终身：当前模式 -> 反向 SOCKS -> 公共代理。
+_dl() {
+  curl -fsSL $CURL_T $CURL_NET "$(ghurl "$1")" -o "$2" 2>/dev/null && return 0
+  if [ "$SOCKS_OK" = yes ] && [ "$GHMODE" != socks ]; then
+    echo "      直连卡住，改走反向 SOCKS 重试" >&2
+    curl -fsSL $CURL_T --socks5-hostname "$SOCKS" "$1" -o "$2" 2>/dev/null && return 0
+  fi
+  [ "$GHMODE" = proxy ] && return 1
+  echo "      改走 $GHPROXY 重试" >&2
+  curl -fsSL $CURL_T "$GHPROXY/$1" -o "$2" 2>/dev/null
 }
 
 # ---------- 1/5 取仓库 ----------
@@ -247,8 +268,10 @@ ghbin() {
   [ -n "$tag" ] || { echo "版本探测失败（连不上 github.com？）"; return 1; }
   asset=$(printf '%s' "$2" | sed "s/TAG/$tag/g; s/VER/${tag#v}/g")
   t=$(mktemp -d)
-  curl -fsSL $CURL_T $CURL_NET "$(ghurl "https://github.com/$1/releases/download/$tag/$asset")" \
-    | tar -xz -C "$t" 2>/dev/null || :
+  if ! _dl "https://github.com/$1/releases/download/$tag/$asset" "$t/pkg.tgz"; then
+    rm -rf "$t"; echo "下载失败：$asset"; return 1
+  fi
+  tar -xzf "$t/pkg.tgz" -C "$t" 2>/dev/null || :
   f=$(find "$t" -type f -name "$3" | head -1)
   if [ -n "$f" ]; then install -m755 "$f" "$BIN/$3"; rm -rf "$t"; return 0
   else rm -rf "$t"; echo "下载失败：$asset"; return 1; fi
@@ -259,7 +282,7 @@ ghraw() {
   tag=$(ghtag "$1" || :)
   [ -n "$tag" ] || { echo "版本探测失败（连不上 github.com？）"; return 1; }
   asset=$(printf '%s' "$2" | sed "s/TAG/$tag/g; s/VER/${tag#v}/g")
-  curl -fsSL $CURL_T $CURL_NET "$(ghurl "https://github.com/$1/releases/download/$tag/$asset")" -o "$BIN/$3.part" \
+  _dl "https://github.com/$1/releases/download/$tag/$asset" "$BIN/$3.part" \
     || { echo "下载失败：$asset"; return 1; }
   chmod +x "$BIN/$3.part" && mv "$BIN/$3.part" "$BIN/$3"
 }
