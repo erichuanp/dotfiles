@@ -34,6 +34,8 @@ step() {
   printf '%*s' "$_pad" ''
 }
 okmsg() { echo "$1"; }
+# 换路提示要绕开 want 的 $(...) 捕获，直接写终端；没有 tty（容器构建）就退到 stderr
+_note() { printf '\n      %s ' "$1" > /dev/tty 2>/dev/null || printf '\n      %s ' "$1" >&2; }
 
 have git || { echo "需要 git，先装 git" >&2; exit 1; }
 
@@ -129,11 +131,11 @@ ghurl() {
 _dl() {
   curl -fsSL $CURL_T $CURL_NET "$(ghurl "$1")" -o "$2" 2>/dev/null && return 0
   if [ "$SOCKS_OK" = yes ] && [ "$GHMODE" != socks ]; then
-    echo "      直连卡住，改走反向 SOCKS 重试" >&2
+    _note "换走反向 SOCKS 重试"
     curl -fsSL $CURL_T --socks5-hostname "$SOCKS" "$1" -o "$2" 2>/dev/null && return 0
   fi
   [ "$GHMODE" = proxy ] && return 1
-  echo "      改走 $GHPROXY 重试" >&2
+  _note "换走 $GHPROXY 重试"
   curl -fsSL $CURL_T "$GHPROXY/$1" -o "$2" 2>/dev/null
 }
 
@@ -251,15 +253,26 @@ case "$os" in Darwin) osname=macos ;; Linux) osname=linux ;; *) osname="" ;; esa
 
 # 直连时走 releases/latest 的重定向拿版本号，不碰 API 免限流；
 # 代理模式下 github.com 根本不通，改用 api.github.com（国内可达）
+# 直连时走 releases/latest 的重定向拿版本号，不碰 API 免限流；
+# 拿不到就退到 api.github.com（国内可达），再退到反向 SOCKS。
 ghtag() {
+  _t=""
   if [ "$GHMODE" = direct ]; then
-    curl -fsSLI $CURL_NET --connect-timeout 10 --max-time 20 --retry 2 -o /dev/null -w '%{url_effective}' \
-      "https://github.com/$1/releases/latest" | grep -o '/tag/[^/]*$' | sed 's#.*/tag/##'
-  else
-    curl -fsSL $CURL_NET --connect-timeout 10 --max-time 20 --retry 2 \
-      "https://api.github.com/repos/$1/releases/latest" \
-      | grep -m1 '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/'
+    _t=$(curl -fsSLI --connect-timeout 8 --max-time 15 -o /dev/null -w '%{url_effective}' \
+         "https://github.com/$1/releases/latest" 2>/dev/null \
+         | grep -o '/tag/[^/]*$' | sed 's#.*/tag/##')
   fi
+  [ -n "$_t" ] && { echo "$_t"; return 0; }
+  _t=$(curl -fsSL $CURL_NET --connect-timeout 8 --max-time 15 \
+       "https://api.github.com/repos/$1/releases/latest" 2>/dev/null \
+       | grep -m1 '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+  [ -n "$_t" ] && { echo "$_t"; return 0; }
+  if [ "$SOCKS_OK" = yes ] && [ "$GHMODE" != socks ]; then
+    _t=$(curl -fsSL --socks5-hostname "$SOCKS" --connect-timeout 8 --max-time 15 \
+         "https://api.github.com/repos/$1/releases/latest" 2>/dev/null \
+         | grep -m1 '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')
+  fi
+  echo "$_t"
 }
 # ghbin <repo> <tar.gz 资产名，TAG/VER 占位> <二进制名>
 ghbin() {
