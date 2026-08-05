@@ -133,11 +133,52 @@ function psrc {
 
 # dot 包装：pull 成功后提示重载
 function dot {
+    if ($args.Count -ge 1 -and $args[0] -eq 'h') {
+        @'
+Stage Files:
+# 对于无 SSH 的改动
+dot status  # 目前的改动
+dot add -u  # 将改动添加
+# 对于有 SSH 的改动
+dotseal
+
+Push:
+dot commit -m "提交信息"
+dot remote set-url origin git@github.com:erichuanp/dotfiles.git  # 只需跑一次
+dot push
+
+Pull:
+dot pull
+# 如果有 SSH 的改动
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -in ~/.ssh/config.enc -out ~/.ssh/config
+openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -in ~/.ssh/authorized_keys.enc -out ~/.ssh/authorized_keys
+# 重新进 Shell
+
+如果有不想纳管的文件，请用 *.local 来 append 到已纳管文件。
+  ~/.gitconfig.local   Documents/PowerShell/profile.local.ps1
+'@ | Write-Host
+        return
+    }
     $exe = Get-Command git -CommandType Application -ErrorAction Stop
     & $exe --git-dir="$HOME\.dotfiles" --work-tree="$HOME" @args
     if ($LASTEXITCODE -eq 0 -and $args.Count -ge 1 -and @('pull','checkout','reset') -contains $args[0]) {
         Write-Host "配置已更新：运行 . `$PROFILE 生效（或重开终端）" -ForegroundColor Yellow
     }
+}
+
+# dotseal：把明文 ~/.ssh/{config,authorized_keys} 重新加密回仓库
+# 改完 ssh 相关文件必须跑一次，否则提交上去的还是旧密文
+function dotseal {
+    $any = $false
+    foreach ($f in @('config','authorized_keys')) {
+        $src = "$HOME\.ssh\$f"
+        if (-not (Test-Path $src)) { continue }
+        & openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt -in $src -out "$src.enc"
+        if ($LASTEXITCODE -ne 0) { return }
+        dot add "$src.enc"; $any = $true
+    }
+    if ($any) { Write-Host '已加密并 staged，接着 dot commit && dot push' }
+    else { Write-Host '没有可加密的文件' }
 }
 
 # 本机私有补充（此文件不纳管）
