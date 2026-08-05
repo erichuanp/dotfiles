@@ -8,7 +8,6 @@ $GitDir  = Join-Path $HOME '.dotfiles'
 $Backup  = Join-Path $HOME 'tmp\.dotfiles-backup'
 $Proxy   = if ($env:DOTFILES_GH_PROXY) { $env:DOTFILES_GH_PROXY } else { 'https://ghfast.top' }
 $Socks   = if ($env:DOTFILES_SOCKS) { $env:DOTFILES_SOCKS } else { '127.0.0.1:1080' }
-$CurlNet = @()   # socks 模式下的 curl.exe 参数
 $GitNet  = @()   # socks 模式下的 git 参数
 
 function dot { & git @GitNet --git-dir="$GitDir" --work-tree="$HOME" @args }
@@ -48,24 +47,30 @@ Write-Host "平台：Windows $env:PROCESSOR_ARCHITECTURE"
 # 四级回退。反向 SOCKS 排在公共代理前面：它只转发 TCP，到 GitHub 的 TLS 是端到端的；
 # ghfast 必须终止 TLS 再重新取，内容它全看得见。
 # 用 curl.exe（Win10+ 自带）而不是 Invoke-WebRequest —— 后者不支持 SOCKS 代理。
-function Test-Url($u, $extra) {
-    & curl.exe -fsS -o NUL @extra --connect-timeout 10 --max-time 25 $u 2>$null
-    return ($LASTEXITCODE -eq 0)
-}
+# 写成朴素的嵌套 if：@() 放在参数位置会让解析器懵，别用函数包一层。
 step 'github.com 连通性'
 $mode = 'fail'
-if (Test-Url 'https://github.com/' @()) { $mode = 'direct'; okmsg 'OK' }
-elseif (Test-Url 'https://github.com/' @('--socks5-hostname', $Socks)) {
-    # SSH 协议不允许服务端主动向客户端开通道，这条管子只能是上游机器
-    # 连过来时用 -R 铺好的。这里只负责发现它在不在。
-    $mode = 'socks'; okmsg "直连不通 -> 反向 SOCKS $Socks"
-    $CurlNet = @('--socks5-hostname', $Socks)
-    $GitNet  = @('-c', "http.proxy=socks5h://$Socks")
+& curl.exe -fsS -o NUL --connect-timeout 10 --max-time 25 'https://github.com/' 2>$null
+if ($LASTEXITCODE -eq 0) {
+    $mode = 'direct'
+    okmsg 'OK'
+} else {
+    # SSH 协议不允许服务端主动向客户端开通道，这条管子只能是上游机器连过来时
+    # 用 -R 铺好的。这里只负责发现它在不在。
+    & curl.exe -fsS -o NUL --socks5-hostname $Socks --connect-timeout 10 --max-time 25 'https://github.com/' 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        $mode = 'socks'
+        okmsg "直连不通 -> 反向 SOCKS $Socks"
+        $GitNet = @('-c', "http.proxy=socks5h://$Socks")
+    } else {
+        & curl.exe -fsS -o NUL --connect-timeout 10 --max-time 25 "$Proxy/https://github.com/" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $mode = 'proxy'
+            okmsg "直连不通 -> $Proxy"
+        }
+    }
 }
-elseif (Test-Url "$Proxy/https://github.com/" @()) {
-    $mode = 'proxy'; okmsg "直连不通 -> $Proxy"
-}
-else {
+if ($mode -eq 'fail') {
     okmsg 'FAIL'
     Write-Host ''
     Write-Host "连不上 GitHub，三条路都不通：直连 / 反向 SOCKS($Socks) / $Proxy"
@@ -81,7 +86,7 @@ else {
     } else {
         Write-Host '安装失败，需要代理环境。'
         Write-Host '本机不是 ssh 会话，没有上游可借；请先让这台机器能上 GitHub，'
-        Write-Host '或用 $env:DOTFILES_GH_PROXY=<可用的代理> 重跑。'
+        Write-Host '或设 $env:DOTFILES_GH_PROXY=<可用的代理> 重跑。'
     }
     exit 1
 }
