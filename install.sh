@@ -89,7 +89,7 @@ fi
 step "github.com 连通性"
 if curl -fsS -o /dev/null --connect-timeout 10 --max-time 25 --retry 1 https://github.com/ 2>/dev/null; then
   GHMODE=direct
-  if [ "$SOCKS_OK" = yes ]; then okmsg "OK"; else okmsg "OK"; fi
+  okmsg "OK"
 elif [ "$SOCKS_OK" = yes ]; then
   GHMODE=socks; okmsg "直连不通 -> 反向 SOCKS $SOCKS"
   CURL_NET="--socks5-hostname $SOCKS"
