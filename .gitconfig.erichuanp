@@ -1,0 +1,21 @@
+# 我的 git 身份与行为，这是唯一一份真内容。
+# 公用账户上 ~/.gitconfig 是同事的，不能碰，所以 .zshrc 里用
+# GIT_CONFIG_GLOBAL 把我自己的会话指到这个文件。
+[user]
+	name = erichuanp
+	email = erichuanp@gmail.com
+[init]
+	defaultBranch = main
+[core]
+	excludesfile = ~/.gitignore_global
+	pager = cat
+[submodule]
+	recurse = true
+[filter "lfs"]
+	clean = git-lfs clean -- %f
+	smudge = git-lfs smudge -- %f
+	process = git-lfs filter-process
+	required = true
+# 本机私有（编辑器、凭据助手等按机器/系统不同的东西）。必须放最后：后读的赢
+[include]
+	path = ~/.gitconfig.local

@@ -136,6 +136,10 @@ export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
 
+# ---- 公用账户：把 git 身份指到自己的文件，绝不碰别人的 ~/.gitconfig
+#      标记文件由 install.sh 的 3 级写下，其他机器上不存在，所以这行是空操作
+[ -f "$HOME/.dotfiles-shared" ] && export GIT_CONFIG_GLOBAL="$HOME/.gitconfig.erichuanp"
+
 # ---- dot：操作 dotfiles 仓库。$HOME 就是工作区，所以 `dot status` = 真实漂移
 dot() {
   if [[ "${1:-}" == h ]]; then

@@ -25,9 +25,29 @@ irm https://raw.githubusercontent.com/erichuanp/dotfiles/main/install.ps1 | iex
 |---|---|---|
 | **1 个人设备** | 自己的机器 | 全套 + `ssh config`、`authorized_keys`（要密码解密） |
 | **2 公司个人用户** | 公司里我自己的账号 | 除 ssh 相关外全套 |
-| **3 容器** | dev container | 只有 shell / git / tmux 配置（Windows 无此级） |
+| **3 公司公用用户** | thor1/2/3 那种多人共用的账号 | 只铺 `.zshrc` / `.zprofile` / `.gitconfig.erichuanp` |
+| **4 容器** | dev container | 只有 shell / git / tmux 配置（Windows 无 3、4 级） |
 
-跳过提问：`DOTFILES_TIER=2 curl ... | sh`。**容器构建时没有 tty，自动按 3 级装**，
+### 3 级为什么只铺这几个
+
+公用账户里 `$HOME` 的每个文件都是所有人共用的。判断标准只有一条：
+**覆盖它会不会改变别人的行为。**
+
+那几台机器上其他人全用 bash，只有我用 zsh，所以 `.zshrc` / `.zprofile`
+事实上是我的私人文件，可以直接铺。其余一律不碰：
+
+- `.gitconfig` —— 上面是同事的 git 身份，覆盖等于把他的提交记到我头上
+- `authorized_keys` —— 覆盖等于把人锁在门外
+- `.bashrc` / `.profile` / `.tmux.conf` / `.vimrc` / `.inputrc` —— 所有人都在读
+
+git 身份靠 `GIT_CONFIG_GLOBAL` 绕开：3 级会写一个 `~/.dotfiles-shared` 标记，
+`.zshrc` 见到它就把 `GIT_CONFIG_GLOBAL` 指向 `~/.gitconfig.erichuanp`。
+于是我的 zsh 会话用我的身份，同事的 bash 会话照常读 `~/.gitconfig`，一个字节没动。
+**需要 git ≥ 2.32。**
+
+3 级也不装任何要 sudo 的东西，不装 conda / node —— 公用机器上动全局是替别人做决定。
+
+跳过提问：`DOTFILES_TIER=2 curl ... | sh`。**容器构建时没有 tty，自动按 4 级装**，
 所以 Dockerfile 里直接写：
 
 ```dockerfile

@@ -40,9 +40,12 @@ _note() { printf '\n      %s ' "$1" > /dev/tty 2>/dev/null || printf '\n      %s
 have git || { echo "需要 git，先装 git" >&2; exit 1; }
 
 # ---------- 分级 ----------
-COMMON='.zshrc .bashrc .profile .zprofile .tmux.conf .gitconfig .gitignore_global .vimrc .inputrc'
+COMMON='.zshrc .bashrc .profile .zprofile .tmux.conf .gitconfig .gitconfig.erichuanp .gitignore_global .vimrc .inputrc'
 HOSTONLY='.condarc .hushlogin .local/bin/dotup .local/bin/sfp'
 PERSONAL='.ssh/authorized_keys.enc .ssh/config.enc'
+# 公用账户：$HOME 里每个文件都是所有人共用的，只有 zsh 那一族事实上归我
+# （其他人全用 bash）。.gitconfig / .bashrc / .tmux.conf / authorized_keys 一律不碰。
+SHARED='.zshrc .zprofile .gitconfig.erichuanp .local/bin/dotup .local/bin/sfp'
 
 tier="${DOTFILES_TIER:-}"
 if [ -z "$tier" ]; then
@@ -50,12 +53,13 @@ if [ -z "$tier" ]; then
     {
       echo "1. 个人设备      —— 需要密码"
       echo "2. 公司个人用户  —— 无 ssh"
-      echo "3. 容器          —— 仅有 shell/git/tmux 配置"
-      printf '选择 [1/2/3]: '
+      echo "3. 公司公用用户  —— 只铺 zsh 那一族，不碰任何共享文件"
+      echo "4. 容器          —— 仅有 shell/git/tmux 配置"
+      printf '选择 [1/2/3/4]: '
     } > /dev/tty
     read -r tier < /dev/tty
   else
-    tier=3
+    tier=4
     say "无 tty，按容器级安装"
   fi
 fi
@@ -63,7 +67,8 @@ fi
 case "$tier" in
   1) FILES="$COMMON $HOSTONLY $PERSONAL" ;;
   2) FILES="$COMMON $HOSTONLY" ;;
-  3) FILES="$COMMON" ;;
+  3) FILES="$SHARED" ;;
+  4) FILES="$COMMON" ;;
   *) exit 1 ;;
 esac
 echo
@@ -208,6 +213,7 @@ if _out=$(dot checkout -f 2>&1); then okmsg "OK"
 else okmsg "FAIL"; echo "$_out" | head -6 | sed 's/^/        /'; exit 1; fi
 dot reset -q
 
+if [ "$tier" = 3 ]; then : > "$HOME/.dotfiles-shared"; fi
 [ -d "$HOME/.ssh" ] && chmod 700 "$HOME/.ssh"
 chmod +x "$BIN/dotup" "$BIN/sfp" 2>/dev/null || :
 
@@ -336,13 +342,14 @@ Linux)
   want lsd ghbin lsd-rs/lsd         "lsd-TAG-$a1-unknown-linux-musl.tar.gz"
   want rg  ghbin BurntSushi/ripgrep "ripgrep-VER-$a1-unknown-linux-$rgl.tar.gz"
   want fzf ghbin junegunn/fzf       "fzf-VER-linux_$a2.tar.gz"
-  if [ "$tier" != 3 ]; then
+  case "$tier" in 1|2|3)
     want gh      ghbin cli/cli         "gh_VER_linux_$a2.tar.gz"
     want git-lfs ghbin git-lfs/git-lfs "git-lfs-linux-$a2-TAG.tar.gz"
-  fi
+  ;; esac
   # 全局基础件：只有缺了才装。非 root 问一次 sudo，拿不到就跳过，绝不中断
   base=""
-  for p in zsh tmux vim curl; do have "$p" || base="$base $p"; done
+  # 3 级不装系统包：公用机器上动全局是替别人做决定
+  [ "$tier" = 3 ] || for p in zsh tmux vim curl; do have "$p" || base="$base $p"; done
   step "系统包$base"
   if [ -z "$base" ]; then
     okmsg "SKIP"
@@ -381,7 +388,7 @@ for p in zsh-users/zsh-autosuggestions zsh-users/zsh-syntax-highlighting; do
   else okmsg "FAIL"; fi
 done
 
-if [ "$tier" != 3 ]; then
+case "$tier" in 1|2)
   # sshow：和 ssh config 配套，pip 装，三端同一个命令
   # sshow：和 ssh config 配套。新版 Debian/Ubuntu 有 PEP 668 限制，
   # 普通 pip --user 会被拒，要加 --break-system-packages（装进用户目录，不动系统包）
@@ -425,7 +432,10 @@ if [ "$tier" != 3 ]; then
       okmsg "OK"
     else okmsg "FAIL"; echo "$_out" | tail -3 | sed 's/^/        /'; fi
   fi
-fi
+;;
+# 3 级只多装个 dops（纯新增二进制，不改任何人的行为）
+3) want dops ghraw Mikescher/better-docker-ps "dops_${osname}-${a2}" ;;
+esac
 
 echo
 echo "安装完成。"

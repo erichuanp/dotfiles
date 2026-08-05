@@ -1,18 +1,4 @@
-[user]
-	name = erichuanp
-	email = erichuanp@gmail.com
-[init]
-	defaultBranch = main
-[core]
-	excludesfile = ~/.gitignore_global
-	pager = cat
-[submodule]
-	recurse = true
-[filter "lfs"]
-	clean = git-lfs clean -- %f
-	smudge = git-lfs smudge -- %f
-	process = git-lfs filter-process
-	required = true
-# 本机私有（编辑器、凭据助手等按机器/系统不同的东西）。必须放最后：后读的赢
+# 只做转发，真内容在 .gitconfig.erichuanp —— 避免两份文件各改各的。
+# 它自己会再 include ~/.gitconfig.local，所以本机覆盖照常生效。
 [include]
-	path = ~/.gitconfig.local
+	path = ~/.gitconfig.erichuanp
