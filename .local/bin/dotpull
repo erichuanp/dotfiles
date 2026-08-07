@@ -1,0 +1,52 @@
+#!/bin/sh
+# dotpull —— 给所有纳管机器 dot pull 一遍，并列出各自停在哪个提交。
+#
+#   dotpull              # 全部
+#   dotpull sz1 pi4g     # 只挑几台
+#
+# 主机名来自 ~/.ssh/config，所以这个脚本只在能解析那些 Host 的机器上有意义
+# （实际就是 mbp）。eva02 是 Windows、legi 常年关机，默认都不在列表里。
+set -u
+
+# mini4 在家里的 NAT 后面，走 home 这个反向隧道入口。
+# thor1/2/3 的 ssh 配置带 RemoteCommand exec zsh -l，会把非交互命令顶掉，
+# 所以必须用不带 RemoteCommand 的 *cp 变体。
+DEFAULT_HOSTS='home pi4g sz1 sz2 la sg hk
+               dev1 dev2 dev3 dev4 dev11 dev12
+               thor1cp thor2cp thor3cp'
+
+HOSTS=${*:-$DEFAULT_HOSTS}
+OUT=$(mktemp -d)
+
+# 本机单独处理：不用 ssh
+if [ -d "$HOME/.dotfiles" ]; then
+  git --git-dir="$HOME/.dotfiles" --work-tree="$HOME" pull -q --rebase origin main >/dev/null 2>&1
+  git --git-dir="$HOME/.dotfiles" rev-parse --short HEAD > "$OUT/00-本机" 2>/dev/null
+fi
+
+for h in $HOSTS; do
+  (
+    r=$(ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "$h" '
+      G="$HOME/.dotfiles"
+      [ -d "$G" ] || { echo "未安装"; exit 0; }
+      git --git-dir="$G" --work-tree="$HOME" pull -q --rebase origin main >/dev/null 2>&1 \
+        || { echo "pull 失败"; exit 0; }
+      git --git-dir="$G" rev-parse --short HEAD
+    ' 2>/dev/null | tail -1)
+    [ -n "$r" ] || r="连不上"
+    printf '%s\n' "$r" > "$OUT/$h"
+  ) &
+done
+wait
+
+printf '%-10s %s\n' HOST 结果
+for f in "$OUT"/*; do
+  [ -e "$f" ] || continue
+  printf '%-10s %s\n' "$(basename "$f" | sed 's/^00-//')" "$(cat "$f")"
+done
+
+# 正常情况下所有机器应该停在同一个提交上；多于一个说明有机器没跟上
+echo
+echo "出现过的提交：$(cat "$OUT"/* 2>/dev/null | grep '^[0-9a-f]\{7,\}$' | sort -u | tr '\n' ' ')"
+
+rm -rf "$OUT"

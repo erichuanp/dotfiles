@@ -47,11 +47,11 @@ have git || { echo "需要 git，先装 git" >&2; exit 1; }
 
 # ---------- 分级 ----------
 COMMON='.zshrc .bashrc .profile .zprofile .tmux.conf .gitconfig .gitconfig.erichuanp .gitignore_global .vimrc .inputrc'
-HOSTONLY='.condarc .hushlogin .local/bin/dotup .local/bin/sfp'
+HOSTONLY='.condarc .hushlogin .local/bin/dotup .local/bin/sfp .local/bin/dotpull'
 PERSONAL='.ssh/authorized_keys.enc .ssh/config.enc'
 # 公用账户：$HOME 里每个文件都是所有人共用的，只有 zsh 那一族事实上归我
 # （其他人全用 bash）。.gitconfig / .bashrc / .tmux.conf / authorized_keys 一律不碰。
-SHARED='.zshrc .zprofile .gitconfig.erichuanp .local/bin/dotup .local/bin/sfp'
+SHARED='.zshrc .zprofile .gitconfig.erichuanp .local/bin/dotup .local/bin/sfp .local/bin/dotpull'
 
 tier="${DOTFILES_TIER:-}"
 if [ -z "$tier" ]; then
@@ -246,7 +246,7 @@ if [ "$tier" = 3 ]; then
   done
 fi
 [ -d "$HOME/.ssh" ] && chmod 700 "$HOME/.ssh"
-chmod +x "$BIN/dotup" "$BIN/sfp" 2>/dev/null || :
+chmod +x "$BIN/dotup" "$BIN/sfp" "$BIN/dotpull" 2>/dev/null || :
 
 # ---------- 3/5 解密 ----------
 if [ "$tier" = 1 ]; then
