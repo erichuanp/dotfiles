@@ -235,7 +235,16 @@ if _out=$(dot checkout -f 2>&1); then okmsg "OK"
 else okmsg "FAIL"; echo "$_out" | head -6 | sed 's/^/        /'; exit 1; fi
 dot reset -q
 
-if [ "$tier" = 3 ]; then : > "$HOME/.dotfiles-shared"; fi
+if [ "$tier" = 3 ]; then
+  : > "$HOME/.dotfiles-shared"
+  # 公用账户上，同事的这些文件仍然留在索引里（sparse 规则碰不动已存在且内容
+  # 不同的文件，只会 warning）。标成 skip-worktree，git 从此彻底无视它们：
+  # dot status 不再有噪音，将来任何 checkout 也不会把同事的文件覆盖掉。
+  for _sf in $COMMON $HOSTONLY; do
+    case " $SHARED " in *" $_sf "*) continue ;; esac
+    dot update-index --skip-worktree "$_sf" 2>/dev/null || :
+  done
+fi
 [ -d "$HOME/.ssh" ] && chmod 700 "$HOME/.ssh"
 chmod +x "$BIN/dotup" "$BIN/sfp" 2>/dev/null || :
 
