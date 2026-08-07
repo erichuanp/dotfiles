@@ -241,7 +241,15 @@ docker() {
   (( ${#funcstack} == 1 )) || { command docker "$@"; return }
   if [[ "$1" == "ps" ]] && command -v dops >/dev/null 2>&1; then
     shift
-    DOCKER_HOST=${DOCKER_HOST:-unix://$HOME/.orbstack/run/docker.sock} dops "$@"
+    # OrbStack 的 socket 只有 macOS 上有。以前这里无条件把它当默认 DOCKER_HOST，
+    # Linux 上就等于把 dops 指向一个不存在的 socket（报 "Call to unix socket
+    # failed"）——而它什么都不设时本来就能找到 /var/run/docker.sock。
+    local _sock="$HOME/.orbstack/run/docker.sock"
+    if [[ -z "$DOCKER_HOST" && -S "$_sock" ]]; then
+      DOCKER_HOST="unix://$_sock" dops "$@"
+    else
+      dops "$@"
+    fi
   else
     command docker "$@"
   fi
