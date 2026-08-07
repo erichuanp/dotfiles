@@ -11,9 +11,15 @@ set -u
 # mini4 在家里的 NAT 后面，走 home 这个反向隧道入口。
 # thor1/2/3 的 ssh 配置带 RemoteCommand exec zsh -l，会把非交互命令顶掉，
 # 所以必须用不带 RemoteCommand 的 *cp 变体。
-DEFAULT_HOSTS='home pi4g sz1 sz2 la sg hk
+DEFAULT_HOSTS='home pi4g sz1 sz2 la sg hk eva02
                dev1 dev2 dev3 dev4 dev11 dev12
                thor1cp thor2cp thor3cp'
+
+# 这些跑 PowerShell，命令写法完全不同。
+# 注意：eva02 的 sshd 需要设了 DefaultShellCommandOption 才会执行传过去的命令，
+# 否则 ssh 只会开一个交互式 PowerShell 然后把命令丢掉（reg add
+# "HKLM\SOFTWARE\OpenSSH" /v DefaultShellCommandOption /t REG_SZ /d "-Command"）。
+WIN_HOSTS='eva02'
 
 HOSTS=${*:-$DEFAULT_HOSTS}
 OUT=$(mktemp -d)
@@ -27,6 +33,20 @@ fi
 
 for h in $HOSTS; do
   (
+    case " $WIN_HOSTS " in
+    *" $h "*)
+      r=$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$h" '
+        $g = "$HOME\.dotfiles"
+        if (Test-Path $g) {
+          & git --git-dir=$g fetch -q origin
+          & git --git-dir=$g --work-tree=$HOME merge --ff-only origin/main | Out-Null
+          & git --git-dir=$g rev-parse --short HEAD
+        } else { "未安装" }' 2>/dev/null | tr -d '\r' | grep -E '^[0-9a-f]{7,}$|^未安装$' | tail -1)
+      [ -n "$r" ] || r="连不上/sshd 未配 DefaultShellCommandOption"
+      printf '%s\n' "$r" > "$OUT/$h"
+      exit 0
+      ;;
+    esac
     r=$(ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "$h" '
       G="$HOME/.dotfiles"
       [ -d "$G" ] || { echo "未安装"; exit 0; }
