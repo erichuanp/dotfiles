@@ -156,7 +156,7 @@ dot commit -m "提交信息"
 dot push
 
 Pull:
-dot pull
+dot up      # = fetch + merge --ff-only，公用账户上也能用（dot pull 会被同事的改动卡住）
 # 如果有 SSH 的改动
 openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -in ~/.ssh/config.enc -out ~/.ssh/config
 openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -in ~/.ssh/authorized_keys.enc -out ~/.ssh/authorized_keys
@@ -167,6 +167,13 @@ chmod 600 ~/.ssh/config ~/.ssh/authorized_keys
   ~/.zshrc.local  ~/.bashrc.local  ~/.profile.local  ~/.gitconfig.local
 DOTHELP
     return 0
+  fi
+  # dot up = fetch + ff-only。公用账户上同事的文件永远是"已修改"状态，
+  # pull --rebase 会因此直接罢工；ff-only 只碰本次真正变动的文件。
+  if [[ "${1:-}" == up ]]; then
+    git --git-dir="$HOME/.dotfiles" fetch -q origin || return
+    git --git-dir="$HOME/.dotfiles" --work-tree="$HOME" merge --ff-only origin/main
+    return
   fi
   git --git-dir="$HOME/.dotfiles" --work-tree="$HOME" "$@"
 }

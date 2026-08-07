@@ -20,7 +20,8 @@ OUT=$(mktemp -d)
 
 # 本机单独处理：不用 ssh
 if [ -d "$HOME/.dotfiles" ]; then
-  git --git-dir="$HOME/.dotfiles" --work-tree="$HOME" pull -q --rebase origin main >/dev/null 2>&1
+  git --git-dir="$HOME/.dotfiles" fetch -q origin >/dev/null 2>&1
+  git --git-dir="$HOME/.dotfiles" --work-tree="$HOME" merge --ff-only origin/main >/dev/null 2>&1
   git --git-dir="$HOME/.dotfiles" rev-parse --short HEAD > "$OUT/00-本机" 2>/dev/null
 fi
 
@@ -29,8 +30,12 @@ for h in $HOSTS; do
     r=$(ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "$h" '
       G="$HOME/.dotfiles"
       [ -d "$G" ] || { echo "未安装"; exit 0; }
-      # 失败时把 git 自己那句话带回来——"pull 失败"三个字什么也没说
-      err=$(git --git-dir="$G" --work-tree="$HOME" pull -q --rebase origin main 2>&1) || {
+      # 用 fetch + ff-only，不用 pull --rebase：
+      # rebase 要求整个工作区干净，而公用账户上同事的 .bashrc/.tmux.conf 永远
+      # 是"已修改"状态，那台机器就再也拉不动了。ff-only 只碰这次真正变动的
+      # 文件，同事的文件不在变更集里就完全不受影响；真有分叉时它会老实拒绝。
+      git --git-dir="$G" fetch -q origin 2>/dev/null
+      err=$(git --git-dir="$G" --work-tree="$HOME" merge --ff-only origin/main 2>&1) || {
         echo "失败: $(printf %s "$err" | grep -m1 . | cut -c1-60)"; exit 0; }
       git --git-dir="$G" rev-parse --short HEAD
     ' 2>/dev/null | tail -1)

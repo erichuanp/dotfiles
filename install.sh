@@ -237,13 +237,11 @@ dot reset -q
 
 if [ "$tier" = 3 ]; then
   : > "$HOME/.dotfiles-shared"
-  # 公用账户上，同事的这些文件仍然留在索引里（sparse 规则碰不动已存在且内容
-  # 不同的文件，只会 warning）。标成 skip-worktree，git 从此彻底无视它们：
-  # dot status 不再有噪音，将来任何 checkout 也不会把同事的文件覆盖掉。
-  for _sf in $COMMON $HOSTONLY; do
-    case " $SHARED " in *" $_sf "*) continue ;; esac
-    dot update-index --skip-worktree "$_sf" 2>/dev/null || :
-  done
+  # 同事的 .bashrc/.gitconfig 等会一直处于"已修改"状态：sparse 规则碰不动
+  # 已存在且内容不同的文件，只会 warning 然后放过（这是对的，别人的东西不该动）。
+  # 试过用 update-index --skip-worktree 让 git 无视它们——无效，sparse-checkout
+  # 会重新套用规则把那个位清掉。所以更新一律用 `dot up`（fetch + ff-only），
+  # 它不要求干净工作区，只碰本次真正变动的文件。
 fi
 [ -d "$HOME/.ssh" ] && chmod 700 "$HOME/.ssh"
 chmod +x "$BIN/dotup" "$BIN/sfp" "$BIN/dotpull" 2>/dev/null || :
