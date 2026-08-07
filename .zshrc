@@ -255,5 +255,20 @@ docker() {
   fi
 }
 
+# ---- 提醒仓库有没有新版本
+#      判断只用本地已有的 origin/main，不产生任何网络等待；
+#      真正的 fetch 丢后台且每 6 小时最多一次 —— 开终端不该被网络卡住。
+() {
+  local g="$HOME/.dotfiles" stamp behind
+  [[ -d $g ]] || return
+  behind=$(git --git-dir=$g rev-list --count HEAD..origin/main 2>/dev/null)
+  (( ${behind:-0} > 0 )) && \
+    print -P "%F{yellow}dotfiles 落后 ${behind} 个提交：%f dot pull && exec zsh"
+  stamp=$g/.last-fetch
+  if [[ ! -f $stamp || -n $(find $stamp -mmin +360 2>/dev/null) ]]; then
+    ( git --git-dir=$g fetch -q origin 2>/dev/null; touch $stamp ) &!
+  fi
+}
+
 # ---- 本机私有补充（必须放最后：让本机能覆盖上面任何设定）
 [ -f "$HOME/.zshrc.local" ] && source "$HOME/.zshrc.local"
