@@ -442,7 +442,10 @@ case "$tier" in 1|2)
   else
     okmsg "安装中"
     step "  nvm + node"
-    if _out=$( { curl -fsSL $CURL_T https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash; \
+    # PROFILE=/dev/null：nvm 的安装器默认会往 ~/.profile 追加加载代码，而那是
+    # 我们纳管的文件——一旦被改，这台机器从此 pull 不动（rebase 拒绝带未提交改动）。
+    # .zshrc 里本来就有 nvm 的加载逻辑，那几行纯属多余。
+    if _out=$( { curl -fsSL $CURL_T https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | PROFILE=/dev/null bash; \
                  bash -c '. "$HOME/.nvm/nvm.sh" && nvm install --lts'; } 2>&1 ); then okmsg "OK"
     else okmsg "FAIL"; echo "$_out" | tail -3 | sed 's/^/        /'; fi
   fi
