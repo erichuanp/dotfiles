@@ -181,6 +181,22 @@ function dotseal {
     else { Write-Host '没有可加密的文件' }
 }
 
+# ---- 提醒仓库有没有新版本
+#      判断只用本地已有的 origin/main，不产生任何网络等待；
+#      真正的 fetch 丢后台且每 6 小时最多一次 —— 开终端不该被网络卡住。
+$_g = Join-Path $HOME '.dotfiles'
+if (Test-Path $_g) {
+    $_behind = & git --git-dir="$_g" rev-list --count HEAD..origin/main 2>$null
+    if ($_behind -and [int]$_behind -gt 0) {
+        Write-Host "dotfiles 落后 $_behind 个提交： dot pull，然后 . `$PROFILE" -ForegroundColor Yellow
+    }
+    $_stamp = Join-Path $_g '.last-fetch'
+    if (-not (Test-Path $_stamp) -or ((Get-Date) - (Get-Item $_stamp).LastWriteTime).TotalHours -gt 6) {
+        Start-Process -FilePath 'git' -ArgumentList "--git-dir=$_g","fetch","-q","origin" -WindowStyle Hidden
+        New-Item -ItemType File -Force $_stamp | Out-Null
+    }
+}
+
 # 本机私有补充（此文件不纳管）
 $_localProfile = Join-Path (Split-Path $PROFILE.CurrentUserCurrentHost) 'profile.local.ps1'
 if (Test-Path $_localProfile) { . $_localProfile }
