@@ -17,8 +17,8 @@ function okmsg($m) { Write-Host $m }
 
 if (-not (Get-Command git -ErrorAction Ignore)) { throw '需要 git，先装 Git for Windows' }
 
-# Windows 不跑 zsh，所以 shell 相关的文件不 checkout
-$Common   = @('.gitconfig','.gitignore_global','.vimrc','.inputrc')
+# Windows 不跑 zsh，所以 zsh/bash 的 rc 不 checkout；.tmux.conf 要（Git Bash / WSL / ssh 出去都用得上）
+$Common   = @('.gitconfig','.gitconfig.erichuanp','.gitignore_global','.vimrc','.inputrc','.tmux.conf')
 $HostOnly = @('.condarc',
               'Documents/PowerShell/Microsoft.PowerShell_profile.ps1',
               'Documents/PowerShell/profile.ps1',
@@ -177,7 +177,10 @@ if ($tier -eq '1') {
     $pw = $null
 }
 
-foreach ($id in @('Git.Git','GitHub.cli','OpenJS.NodeJS.LTS','Python.Python.3.13')) {
+# lsd / fzf / ripgrep：PowerShell profile 里的 ls、Ctrl+R、FZF_DEFAULT_COMMAND 依赖它们
+# （没装也不报错，profile 会退回 Get-ChildItem，但手感就没了）
+foreach ($id in @('Git.Git','GitHub.cli','OpenJS.NodeJS.LTS','Python.Python.3.13',
+                  'lsd-rs.lsd','junegunn.fzf','BurntSushi.ripgrep.MSVC')) {
     step $id
     if (winget list --id $id -e 2>$null | Select-String $id) { okmsg 'SKIP' }
     else {
@@ -185,6 +188,16 @@ foreach ($id in @('Git.Git','GitHub.cli','OpenJS.NodeJS.LTS','Python.Python.3.13
         if ($LASTEXITCODE -eq 0) { okmsg 'OK' } else { okmsg 'FAIL' }
     }
 }
+# PSFzf：把 fzf 接到 PSReadLine 的 Ctrl+R / Ctrl+T 上（fzf 本体由上面的 winget 装）
+step 'PSFzf'
+if (Get-Module PSFzf -ListAvailable) { okmsg 'SKIP' }
+else {
+    try {
+        Install-Module PSFzf -Scope CurrentUser -Force -AcceptLicense -ErrorAction Stop
+        okmsg 'OK'
+    } catch { okmsg 'FAIL' }
+}
+
 step 'sshow'
 if (Get-Command sshow -ErrorAction Ignore) { okmsg 'SKIP' }
 else {

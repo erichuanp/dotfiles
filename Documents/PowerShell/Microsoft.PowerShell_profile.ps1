@@ -1,5 +1,32 @@
 if (-not (Get-Command poetry -ErrorAction Ignore)) { $env:Path += ";$env:APPDATA\Python\Scripts" }
 
+# ---- UTF-8：Windows 控制台默认不是 UTF-8，中文/emoji 会花（对应 .zshrc 的 locale 段）
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new()
+
+# ---- PATH（存在才加、去重；对应 .zshrc 的 typeset -gU path）
+foreach ($_p in "$HOME\bin", "$HOME\.local\bin", "$HOME\.npm-global\bin") {
+    if ((Test-Path $_p) -and (($env:Path -split ';') -notcontains $_p)) { $env:Path = "$_p;$env:Path" }
+}
+
+# ---- PSReadLine：灰字历史补全(≈zsh-autosuggestions)、历史去重、Tab 菜单补全、↑↓ 前缀搜索
+#      语法高亮 PSReadLine 自带，不用装东西
+#      Get-Module 判断：非交互宿主（pwsh -c、CI）里 PSReadLine 没加载，硬调会报错
+if (Get-Module PSReadLine) {
+    Set-PSReadLineOption -PredictionSource History -PredictionViewStyle InlineView -HistoryNoDuplicates
+    Set-PSReadLineKeyHandler -Key Tab       -Function MenuComplete
+    Set-PSReadLineKeyHandler -Key UpArrow   -Function HistorySearchBackward
+    Set-PSReadLineKeyHandler -Key DownArrow -Function HistorySearchForward
+}
+
+# ---- fzf：Ctrl+R 模糊历史 / Ctrl+T 找文件（fzf + PSFzf 都装了才生效）
+if ((Get-Command fzf -ErrorAction Ignore) -and (Get-Module PSFzf -ListAvailable)) {
+    Import-Module PSFzf
+    Set-PsFzfOption -PSReadlineChordProvider 'Ctrl+t' -PSReadlineChordReverseHistory 'Ctrl+r'
+    if (Get-Command rg -ErrorAction Ignore) {
+        $env:FZF_DEFAULT_COMMAND = 'rg --files --hidden --follow --glob "!.git/*"'
+    }
+}
+
 # prompt: (conda) 主机名:目录  SSH=绿 本机=黄
 function Prompt {
     $condaEnv = $env:CONDA_DEFAULT_ENV
@@ -78,7 +105,8 @@ function dotup {
     if (-not (Test-Path $ignoreFile)) { New-Item -ItemType File $ignoreFile | Out-Null }
     $ignored = @(Get-Content $ignoreFile)
 
-    $managedIds = @('Git.Git','GitHub.cli','OpenJS.NodeJS.LTS','Python.Python.3.13','tmux')
+    $managedIds = @('Git.Git','GitHub.cli','OpenJS.NodeJS.LTS','Python.Python.3.13','tmux',
+                    'lsd-rs.lsd','junegunn.fzf','BurntSushi.ripgrep.MSVC')
     $updates = @()
     foreach ($line in (winget upgrade --accept-source-agreements 2>$null)) {
         $t = -split $line
@@ -195,6 +223,64 @@ if (Test-Path $_g) {
         Start-Process -FilePath 'git' -ArgumentList "--git-dir=$_g","fetch","-q","origin" -WindowStyle Hidden
         New-Item -ItemType File -Force $_stamp | Out-Null
     }
+}
+
+# ============================================================
+# 标准命令包装 —— 必须放在最底下（和 .zshrc 同构）
+# 每个包装第一行都先问一句：是人在命令行敲的吗？（_AtPrompt，≈ zsh 的 ${#funcstack} == 1）
+#   是 → 走包装
+#   否则（脚本里、函数里、被 dot-source 的文件里）→ 原样转发给原生命令
+# 这样脚本拿到的永远是标准行为：ls 仍返回 FileInfo 对象而不是 lsd 的文本，
+# cd 不会往管道里吐一屏文件名，docker ps 不会变成 dops 把解析脚本搞挂。
+# 想在命令行强制走原生：Get-ChildItem / Set-Location / New-Item -ItemType Directory
+#
+# PS 的别名优先级高于函数，不先摘掉 ls/cd 别名，下面的函数根本不会被调用
+# ============================================================
+foreach ($_a in 'ls', 'cd') { if (Test-Path "Alias:$_a") { Remove-Item "Alias:$_a" -Force } }
+
+# 栈深 3 = _AtPrompt + 包装函数 + 顶层；且顶层帧必须没有 ScriptName ——
+# pwsh -File 跑脚本时顶层帧就是那个脚本，栈深同样是 3，只有这一项能把两者分开
+function _AtPrompt {
+    $s = Get-PSCallStack
+    $s.Count -le 3 -and -not $s[-1].ScriptName
+}
+
+function ls {
+    if (-not (_AtPrompt) -or -not (Get-Command lsd -ErrorAction Ignore)) { Get-ChildItem @args; return }
+    lsd @args
+}
+
+function ll {
+    if (Get-Command lsd -ErrorAction Ignore) { lsd -la @args } else { Get-ChildItem -Force @args }
+}
+
+function lst {
+    param([int]$Depth)
+    if (-not (Get-Command lsd -ErrorAction Ignore)) { Get-ChildItem -Recurse; return }
+    if ($Depth) { lsd --tree --depth $Depth } else { lsd --tree }
+}
+
+function cd {
+    if (-not (_AtPrompt)) { Set-Location @args; return }
+    Set-Location @args
+    if ($?) { if (Get-Command lsd -ErrorAction Ignore) { lsd } else { Get-ChildItem } }
+}
+
+# New-Item -ItemType Directory 本来就等于 mkdir -p，只差"建完自动进去"
+function mkdir {
+    if (-not (_AtPrompt)) { New-Item -ItemType Directory -Path @args; return }
+    $_dirs = @($args | Where-Object { $_ -notlike '-*' })
+    New-Item -ItemType Directory -Force -Path $_dirs | Out-Null
+    if ($_dirs.Count -eq 1) { Set-Location $_dirs[0] }
+}
+
+# docker ps -> dops（better-docker-ps）。没装 dops 就原样透传
+function docker {
+    $_exe = Get-Command docker.exe -CommandType Application -ErrorAction Stop
+    if (-not (_AtPrompt) -or $args[0] -ne 'ps' -or -not (Get-Command dops -ErrorAction Ignore)) {
+        & $_exe @args; return
+    }
+    & dops @($args | Select-Object -Skip 1)
 }
 
 # 本机私有补充（此文件不纳管）
