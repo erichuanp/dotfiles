@@ -187,7 +187,9 @@ openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -in ~/.ssh/authorized_keys.enc 
 '@ | Write-Host
         return
     }
-    $exe = Get-Command git -CommandType Application -ErrorAction Stop
+    # Select-Object -First 1 不能省：Git for Windows 同时在 cmd\ 和 mingw64\bin\ 放了
+    # git.exe，PATH 两条都有时 Get-Command 返回数组，& $exe 会拼成 'git.exe git.exe'
+    $exe = Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1
     & $exe --git-dir="$HOME\.dotfiles" --work-tree="$HOME" @args
     if ($LASTEXITCODE -eq 0 -and $args.Count -ge 1 -and @('pull','checkout','reset') -contains $args[0]) {
         Write-Host "配置已更新：运行 . `$PROFILE 生效（或重开终端）" -ForegroundColor Yellow
@@ -276,7 +278,7 @@ function mkdir {
 
 # docker ps -> dops（better-docker-ps）。没装 dops 就原样透传
 function docker {
-    $_exe = Get-Command docker.exe -CommandType Application -ErrorAction Stop
+    $_exe = Get-Command docker.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
     if (-not (_AtPrompt) -or $args[0] -ne 'ps' -or -not (Get-Command dops -ErrorAction Ignore)) {
         & $_exe @args; return
     }
